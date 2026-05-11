@@ -1,0 +1,15 @@
+{
+	bifrost {
+		agent {
+			connect edge.example.com:8443
+			token {$HOME_TOKEN}
+			endpoint home
+			forward unix//run/tunely/agent-https.sock
+		}
+	}
+}
+
+https://home.example.com {
+	bind unix//run/tunely/agent-https.sock
+	reverse_proxy unix//run/home/app.sock
+}

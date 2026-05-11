@@ -1,0 +1,102 @@
+package caddybifrost
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"errors"
+	"io"
+	"net"
+	"strings"
+)
+
+var errClientHelloParsed = errors.New("client hello parsed")
+
+func peekClientHelloServerName(conn net.Conn) (string, net.Conn, error) {
+	var replay bytes.Buffer
+	peekConn := &readWriteConn{
+		Conn: conn,
+		r:    io.TeeReader(conn, &replay),
+		w:    io.Discard,
+	}
+
+	var serverName string
+	err := tls.Server(peekConn, &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			serverName = hello.ServerName
+			return nil, errClientHelloParsed
+		},
+	}).Handshake()
+	if err != nil && !errors.Is(err, errClientHelloParsed) {
+		return "", nil, err
+	}
+
+	return serverName, &prefixConn{
+		Conn: conn,
+		r:    io.MultiReader(bytes.NewReader(replay.Bytes()), conn),
+	}, nil
+}
+
+type readWriteConn struct {
+	net.Conn
+	r io.Reader
+	w io.Writer
+}
+
+func (c *readWriteConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
+}
+
+func (c *readWriteConn) Write(p []byte) (int, error) {
+	return c.w.Write(p)
+}
+
+type prefixConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	return c.r.Read(p)
+}
+
+func dialAddress(ctx context.Context, address string) (net.Conn, error) {
+	var dialer net.Dialer
+	network, target := splitAddress(address)
+	return dialer.DialContext(ctx, network, target)
+}
+
+func listenAddress(address string) (net.Listener, error) {
+	network, target := splitAddress(address)
+	return net.Listen(network, target)
+}
+
+func splitAddress(address string) (string, string) {
+	switch {
+	case strings.HasPrefix(address, "unix//"):
+		return "unix", strings.TrimPrefix(address, "unix//")
+	case strings.HasPrefix(address, "unix:"):
+		return "unix", strings.TrimPrefix(address, "unix:")
+	case strings.HasPrefix(address, "tcp//"):
+		return "tcp", strings.TrimPrefix(address, "tcp//")
+	case strings.HasPrefix(address, "tcp:"):
+		return "tcp", strings.TrimPrefix(address, "tcp:")
+	default:
+		return "tcp", address
+	}
+}
+
+func closeOnContext(ctx context.Context, conn net.Conn) func() {
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	return func() {
+		close(done)
+	}
+}

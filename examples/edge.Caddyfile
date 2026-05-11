@@ -1,0 +1,19 @@
+{
+	bifrost {
+		edge {
+			connectors :8443 {
+				tls /certs/bifrost/server.crt /certs/bifrost/server.key
+				client home {
+					token {$HOME_TOKEN}
+					policy replace_existing
+					max_streams 100
+				}
+			}
+
+			ingress :443 {
+				route_sni home.example.com home
+				route_sni files.example.com home
+			}
+		}
+	}
+}
