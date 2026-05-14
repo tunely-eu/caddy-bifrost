@@ -2,7 +2,9 @@ package caddybifrost
 
 import (
 	"strconv"
+	"time"
 
+	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 )
 
@@ -14,30 +16,30 @@ func (a *App) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		nesting := d.Nesting()
 		for d.NextBlock(nesting) {
 			switch d.Val() {
-			case "edge":
-				if a.Agent != nil || a.Edge != nil {
-					return d.Errf("configure exactly one bifrost runtime: edge or agent")
+			case "server":
+				if a.Client != nil || a.Server != nil {
+					return d.Errf("configure exactly one bifrost runtime: server or client")
 				}
 				if d.NextArg() {
 					return d.ArgErr()
 				}
-				edge := new(Edge)
-				if err := parseEdgeBody(d, edge, d.Nesting()); err != nil {
+				server := new(Server)
+				if err := parseServerBody(d, server, d.Nesting()); err != nil {
 					return err
 				}
-				a.Edge = edge
-			case "agent":
-				if a.Agent != nil || a.Edge != nil {
-					return d.Errf("configure exactly one bifrost runtime: edge or agent")
+				a.Server = server
+			case "client":
+				if a.Client != nil || a.Server != nil {
+					return d.Errf("configure exactly one bifrost runtime: server or client")
 				}
 				if d.NextArg() {
 					return d.ArgErr()
 				}
-				agent := new(Agent)
-				if err := parseAgentBody(d, agent, d.Nesting()); err != nil {
+				client := new(Client)
+				if err := parseClientBody(d, client, d.Nesting()); err != nil {
 					return err
 				}
-				a.Agent = agent
+				a.Client = client
 			default:
 				return d.ArgErr()
 			}
@@ -46,22 +48,22 @@ func (a *App) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
-func (e *Edge) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+func (s *Server) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		if d.NextArg() {
 			return d.ArgErr()
 		}
-		return parseEdgeBody(d, e, d.Nesting())
+		return parseServerBody(d, s, d.Nesting())
 	}
 	return nil
 }
 
-func parseEdgeBody(d *caddyfile.Dispenser, e *Edge, nesting int) error {
+func parseServerBody(d *caddyfile.Dispenser, s *Server, nesting int) error {
 	for d.NextBlock(nesting) {
 		switch d.Val() {
 		case "connectors":
 			if d.NextArg() {
-				e.ConnectorListen = d.Val()
+				s.ConnectorListen = d.Val()
 			}
 			if d.NextArg() {
 				return d.ArgErr()
@@ -73,33 +75,29 @@ func parseEdgeBody(d *caddyfile.Dispenser, e *Edge, nesting int) error {
 					if !d.NextArg() {
 						return d.ArgErr()
 					}
-					e.TLSCertFile = d.Val()
-					if !d.NextArg() {
-						return d.ArgErr()
-					}
-					e.TLSKeyFile = d.Val()
+					s.TLSSubject = d.Val()
 					if d.NextArg() {
 						return d.ArgErr()
 					}
 				case "client":
-					client, err := parseEdgeClient(d)
+					client, err := parseClientAuth(d)
 					if err != nil {
 						return err
 					}
-					e.Clients = append(e.Clients, client)
+					s.Clients = append(s.Clients, client)
 				default:
 					return d.ArgErr()
 				}
 			}
-		case "ingress":
+		case "passthrough":
 			if d.NextArg() {
-				e.IngressListen = d.Val()
+				s.Passthrough = d.Val()
 			}
 			if d.NextArg() {
 				return d.ArgErr()
 			}
-			ingressNesting := d.Nesting()
-			for d.NextBlock(ingressNesting) {
+			passthroughNesting := d.Nesting()
+			for d.NextBlock(passthroughNesting) {
 				switch d.Val() {
 				case "route_sni":
 					if !d.NextArg() {
@@ -113,7 +111,7 @@ func parseEdgeBody(d *caddyfile.Dispenser, e *Edge, nesting int) error {
 					if d.NextArg() {
 						return d.ArgErr()
 					}
-					e.Routes = append(e.Routes, SNIRoute{ServerName: serverName, Endpoint: endpoint})
+					s.Routes = append(s.Routes, SNIRoute{ServerName: serverName, Endpoint: endpoint})
 				default:
 					return d.ArgErr()
 				}
@@ -125,70 +123,70 @@ func parseEdgeBody(d *caddyfile.Dispenser, e *Edge, nesting int) error {
 	return nil
 }
 
-func parseEdgeClient(d *caddyfile.Dispenser) (EdgeClient, error) {
+func parseClientAuth(d *caddyfile.Dispenser) (ClientAuth, error) {
 	if !d.NextArg() {
-		return EdgeClient{}, d.ArgErr()
+		return ClientAuth{}, d.ArgErr()
 	}
-	client := EdgeClient{Endpoint: d.Val()}
+	client := ClientAuth{Endpoint: d.Val()}
 	if d.NextArg() {
-		return EdgeClient{}, d.ArgErr()
+		return ClientAuth{}, d.ArgErr()
 	}
 	nesting := d.Nesting()
 	for d.NextBlock(nesting) {
 		switch d.Val() {
 		case "token":
 			if !d.NextArg() {
-				return EdgeClient{}, d.ArgErr()
+				return ClientAuth{}, d.ArgErr()
 			}
 			client.Token = d.Val()
 			if d.NextArg() {
-				return EdgeClient{}, d.ArgErr()
+				return ClientAuth{}, d.ArgErr()
 			}
 		case "policy":
 			if !d.NextArg() {
-				return EdgeClient{}, d.ArgErr()
+				return ClientAuth{}, d.ArgErr()
 			}
 			client.Policy = d.Val()
 			if d.NextArg() {
-				return EdgeClient{}, d.ArgErr()
+				return ClientAuth{}, d.ArgErr()
 			}
 		case "max_streams":
 			if !d.NextArg() {
-				return EdgeClient{}, d.ArgErr()
+				return ClientAuth{}, d.ArgErr()
 			}
 			maxStreams, err := strconv.Atoi(d.Val())
 			if err != nil {
-				return EdgeClient{}, err
+				return ClientAuth{}, err
 			}
 			client.MaxStreams = maxStreams
 			if d.NextArg() {
-				return EdgeClient{}, d.ArgErr()
+				return ClientAuth{}, d.ArgErr()
 			}
 		default:
-			return EdgeClient{}, d.ArgErr()
+			return ClientAuth{}, d.ArgErr()
 		}
 	}
 	return client, nil
 }
 
-func (a *Agent) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+func (c *Client) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		if d.NextArg() {
 			return d.ArgErr()
 		}
-		return parseAgentBody(d, a, d.Nesting())
+		return parseClientBody(d, c, d.Nesting())
 	}
 	return nil
 }
 
-func parseAgentBody(d *caddyfile.Dispenser, a *Agent, nesting int) error {
+func parseClientBody(d *caddyfile.Dispenser, c *Client, nesting int) error {
 	for d.NextBlock(nesting) {
 		switch d.Val() {
 		case "connect":
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			a.Connect = d.Val()
+			c.Connect = d.Val()
 			if d.NextArg() {
 				return d.ArgErr()
 			}
@@ -196,7 +194,7 @@ func parseAgentBody(d *caddyfile.Dispenser, a *Agent, nesting int) error {
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			a.Token = d.Val()
+			c.Token = d.Val()
 			if d.NextArg() {
 				return d.ArgErr()
 			}
@@ -204,7 +202,7 @@ func parseAgentBody(d *caddyfile.Dispenser, a *Agent, nesting int) error {
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			a.Endpoint = d.Val()
+			c.Endpoint = d.Val()
 			if d.NextArg() {
 				return d.ArgErr()
 			}
@@ -212,7 +210,7 @@ func parseAgentBody(d *caddyfile.Dispenser, a *Agent, nesting int) error {
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			a.Forward = d.Val()
+			c.Forward = d.Val()
 			if d.NextArg() {
 				return d.ArgErr()
 			}
@@ -220,7 +218,7 @@ func parseAgentBody(d *caddyfile.Dispenser, a *Agent, nesting int) error {
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			a.TLSCAFile = d.Val()
+			c.TLSCAFile = d.Val()
 			if d.NextArg() {
 				return d.ArgErr()
 			}
@@ -228,17 +226,60 @@ func parseAgentBody(d *caddyfile.Dispenser, a *Agent, nesting int) error {
 			if !d.NextArg() {
 				return d.ArgErr()
 			}
-			a.TLSServerName = d.Val()
+			c.TLSServerName = d.Val()
 			if d.NextArg() {
 				return d.ArgErr()
 			}
 		case "tls_insecure_skip_verify":
-			a.TLSInsecureSkipVerify = true
+			c.TLSInsecureSkipVerify = true
 			if d.NextArg() {
 				return d.ArgErr()
 			}
 		default:
 			return d.ArgErr()
+		}
+	}
+	return nil
+}
+
+func (t *Transport) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	for d.Next() {
+		if d.NextArg() {
+			return d.ArgErr()
+		}
+		for nesting := d.Nesting(); d.NextBlock(nesting); {
+			switch d.Val() {
+			case "endpoint":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				t.Endpoint = d.Val()
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+			case "app":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				t.App = d.Val()
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+			case "dial_timeout":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				timeout, err := time.ParseDuration(d.Val())
+				if err != nil {
+					return err
+				}
+				t.DialTimeout = caddy.Duration(timeout)
+				if d.NextArg() {
+					return d.ArgErr()
+				}
+			default:
+				return d.ArgErr()
+			}
 		}
 	}
 	return nil

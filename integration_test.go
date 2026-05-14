@@ -10,18 +10,24 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func TestEdgeAgentProxyRawTLSBySNI(t *testing.T) {
+func TestServerClientPassthroughRawTLSBySNI(t *testing.T) {
 	dir := t.TempDir()
 	bifrostCert, bifrostKey, bifrostCA := writeTestCertFiles(t, dir, "localhost")
+	bifrostKeyPair, err := tls.LoadX509KeyPair(bifrostCert, bifrostKey)
+	if err != nil {
+		t.Fatalf("load bifrost cert: %v", err)
+	}
 	originCertPEM, originKeyPEM := makeTestCert(t, "home.example.com")
 	originCert, err := tls.X509KeyPair(originCertPEM, originKeyPEM)
 	if err != nil {
@@ -31,13 +37,12 @@ func TestEdgeAgentProxyRawTLSBySNI(t *testing.T) {
 	defer stopOrigin()
 
 	connectorAddr := freeTCPAddr(t)
-	ingressAddr := freeTCPAddr(t)
-	edge := &Edge{
+	passthroughAddr := freeTCPAddr(t)
+	server := &Server{
 		ConnectorListen: connectorAddr,
-		IngressListen:   ingressAddr,
-		TLSCertFile:     bifrostCert,
-		TLSKeyFile:      bifrostKey,
-		Clients: []EdgeClient{
+		Passthrough:     passthroughAddr,
+		TLSConfig:       &tls.Config{Certificates: []tls.Certificate{bifrostKeyPair}},
+		Clients: []ClientAuth{
 			{
 				Endpoint:   "home",
 				Token:      "secret",
@@ -47,12 +52,12 @@ func TestEdgeAgentProxyRawTLSBySNI(t *testing.T) {
 		},
 		Routes: []SNIRoute{{ServerName: "home.example.com", Endpoint: "home"}},
 	}
-	if err := edge.Start(); err != nil {
-		t.Fatalf("edge start: %v", err)
+	if err := server.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
 	}
-	defer edge.Stop()
+	defer server.Stop()
 
-	agent := &Agent{
+	client := &Client{
 		Connect:       connectorAddr,
 		Token:         "secret",
 		Endpoint:      "home",
@@ -60,17 +65,91 @@ func TestEdgeAgentProxyRawTLSBySNI(t *testing.T) {
 		TLSCAFile:     bifrostCA,
 		TLSServerName: "localhost",
 	}
-	if err := agent.Start(); err != nil {
-		t.Fatalf("agent start: %v", err)
+	if err := client.Start(); err != nil {
+		t.Fatalf("client start: %v", err)
 	}
-	defer agent.Stop()
+	defer client.Stop()
 
-	response := waitHTTPSResponse(t, ingressAddr, "home.example.com", originCertPEM)
+	response := waitHTTPSResponse(t, passthroughAddr, "home.example.com", originCertPEM)
 	if !bytes.Contains(response, []byte("HTTP/1.1 200 OK")) {
 		t.Fatalf("response = %q", response)
 	}
 	if !bytes.Contains(response, []byte("bifrost-ok")) {
 		t.Fatalf("response body = %q", response)
+	}
+}
+
+func TestTransportProxiesHTTPOverBifrost(t *testing.T) {
+	dir := t.TempDir()
+	bifrostCert, bifrostKey, bifrostCA := writeTestCertFiles(t, dir, "localhost")
+	bifrostKeyPair, err := tls.LoadX509KeyPair(bifrostCert, bifrostKey)
+	if err != nil {
+		t.Fatalf("load bifrost cert: %v", err)
+	}
+	originAddr, stopOrigin := startHTTPOrigin(t)
+	defer stopOrigin()
+
+	connectorAddr := freeTCPAddr(t)
+	server := &Server{
+		ConnectorListen: connectorAddr,
+		TLSConfig:       &tls.Config{Certificates: []tls.Certificate{bifrostKeyPair}},
+		Clients: []ClientAuth{
+			{
+				Endpoint:   "home",
+				Token:      "secret",
+				Policy:     "replace_existing",
+				MaxStreams: 10,
+			},
+		},
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
+	}
+	defer server.Stop()
+
+	client := &Client{
+		Connect:       connectorAddr,
+		Token:         "secret",
+		Endpoint:      "home",
+		Forward:       originAddr,
+		TLSCAFile:     bifrostCA,
+		TLSServerName: "localhost",
+	}
+	if err := client.Start(); err != nil {
+		t.Fatalf("client start: %v", err)
+	}
+	defer client.Stop()
+
+	transport := &Transport{Endpoint: "home", server: server}
+	transport.transport = &http.Transport{
+		DialContext:       transport.dialContext,
+		ForceAttemptHTTP2: false,
+	}
+	defer transport.Cleanup()
+
+	response := waitHTTPTransportResponse(t, transport, "http://home/")
+	if !bytes.Contains(response, []byte("HTTP/1.1 200 OK")) {
+		t.Fatalf("response = %q", response)
+	}
+	if !bytes.Contains(response, []byte("bifrost-ok")) {
+		t.Fatalf("response body = %q", response)
+	}
+}
+
+func TestTransportReturnsErrorWithoutActiveEndpoint(t *testing.T) {
+	transport := &Transport{Endpoint: "missing", server: &Server{}}
+	transport.transport = &http.Transport{
+		DialContext:       transport.dialContext,
+		ForceAttemptHTTP2: false,
+	}
+	defer transport.Cleanup()
+
+	req, err := http.NewRequest(http.MethodGet, "http://missing/", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if _, err := transport.RoundTrip(req); err == nil {
+		t.Fatal("expected transport error")
 	}
 }
 
@@ -80,6 +159,43 @@ func startTLSOrigin(t *testing.T, cert tls.Certificate) (string, func()) {
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{cert},
 	})
+	if err != nil {
+		t.Fatalf("listen origin: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+					return
+				}
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				reader := bufio.NewReader(conn)
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil || line == "\r\n" {
+						break
+					}
+				}
+				_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nbifrost-ok"))
+			}(conn)
+		}
+	}()
+	return ln.Addr().String(), func() {
+		cancel()
+		_ = ln.Close()
+	}
+}
+
+func startHTTPOrigin(t *testing.T) (string, func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen origin: %v", err)
 	}
@@ -149,6 +265,36 @@ func waitHTTPSResponse(t *testing.T, addr string, serverName string, caPEM []byt
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("wait HTTPS response: %v", lastErr)
+	return nil
+}
+
+func waitHTTPTransportResponse(t *testing.T, transport http.RoundTripper, url string) []byte {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		resp, err := transport.RoundTrip(req)
+		if err != nil {
+			lastErr = err
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		response, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err == nil {
+			var buf bytes.Buffer
+			_, _ = fmt.Fprintf(&buf, "%s %s\r\n", resp.Proto, resp.Status)
+			_, _ = buf.Write(response)
+			return buf.Bytes()
+		}
+		lastErr = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("wait HTTP transport response: %v", lastErr)
 	return nil
 }
 

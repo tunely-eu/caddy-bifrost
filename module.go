@@ -9,6 +9,7 @@ import (
 
 func init() {
 	caddy.RegisterModule(new(App))
+	caddy.RegisterModule(new(Transport))
 	httpcaddyfile.RegisterGlobalOption("bifrost", parseApp)
 }
 

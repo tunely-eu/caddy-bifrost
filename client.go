@@ -13,7 +13,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type Agent struct {
+type Client struct {
 	Connect               string `json:"connect,omitempty"`
 	Token                 string `json:"token,omitempty"`
 	Endpoint              string `json:"endpoint,omitempty"`
@@ -29,71 +29,71 @@ type Agent struct {
 	stopOnce sync.Once
 }
 
-func (a *Agent) prepare() error {
-	if strings.TrimSpace(a.Connect) == "" {
+func (c *Client) prepare() error {
+	if strings.TrimSpace(c.Connect) == "" {
 		return fmt.Errorf("connect is required")
 	}
-	if strings.TrimSpace(a.Token) == "" {
+	if strings.TrimSpace(c.Token) == "" {
 		return fmt.Errorf("token is required")
 	}
-	if a.Forward == "" {
-		a.Forward = "unix//run/tunely/agent-https.sock"
+	if c.Forward == "" {
+		c.Forward = "127.0.0.1:8080"
 	}
 	return nil
 }
 
-func (a *Agent) Start() error {
-	if a.logger == nil {
-		a.logger = zap.NewNop()
+func (c *Client) Start() error {
+	if c.logger == nil {
+		c.logger = zap.NewNop()
 	}
-	if err := a.prepare(); err != nil {
+	if err := c.prepare(); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	a.ctx = ctx
-	a.cancel = cancel
+	c.ctx = ctx
+	c.cancel = cancel
 
-	headers := map[string]string{bifrost.TokenHeader: a.Token}
-	if a.Endpoint != "" {
-		headers["x-bifrost-endpoint"] = a.Endpoint
+	headers := map[string]string{bifrost.TokenHeader: c.Token}
+	if c.Endpoint != "" {
+		headers["x-bifrost-endpoint"] = c.Endpoint
 	}
-	a.wg.Add(1)
+	c.wg.Add(1)
 	go func() {
-		defer a.wg.Done()
+		defer c.wg.Done()
 		err := bifrost.RunClient(ctx, bifrost.ClientConfig{
-			ServerURL:             a.Connect,
+			ServerURL:             c.Connect,
 			Headers:               headers,
-			TLSCAFile:             a.TLSCAFile,
-			TLSServerName:         a.TLSServerName,
-			TLSInsecureSkipVerify: a.TLSInsecureSkipVerify,
+			TLSCAFile:             c.TLSCAFile,
+			TLSServerName:         c.TLSServerName,
+			TLSInsecureSkipVerify: c.TLSInsecureSkipVerify,
 		}, bifrost.ClientOptions{
 			Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-			StreamHandler: a.handleStream,
+			StreamHandler: c.handleStream,
 		})
 		if err != nil && ctx.Err() == nil {
-			a.logger.Error("bifrost client stopped", zap.Error(err))
+			c.logger.Error("bifrost client stopped", zap.Error(err))
 		}
 	}()
 	return nil
 }
 
-func (a *Agent) Stop() error {
-	a.stopOnce.Do(func() {
-		if a.cancel != nil {
-			a.cancel()
+func (c *Client) Stop() error {
+	c.stopOnce.Do(func() {
+		if c.cancel != nil {
+			c.cancel()
 		}
-		a.wg.Wait()
+		c.wg.Wait()
 	})
 	return nil
 }
 
-func (a *Agent) handleStream(ctx context.Context, stream net.Conn) {
+func (c *Client) handleStream(ctx context.Context, stream net.Conn) {
 	done := closeOnContext(ctx, stream)
 	defer done()
 
-	target, err := dialAddress(ctx, a.Forward)
+	target, err := dialAddress(ctx, c.Forward)
 	if err != nil {
-		a.logger.Warn("dial internal caddy ingress failed", zap.String("forward", a.Forward), zap.Error(err))
+		c.logger.Warn("dial internal caddy target failed", zap.String("forward", c.Forward), zap.Error(err))
 		_ = stream.Close()
 		return
 	}

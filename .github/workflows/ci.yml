@@ -27,4 +27,6 @@ jobs:
       - name: build caddy with module
         run: xcaddy build --with github.com/tunely-eu/caddy-bifrost=.
       - name: verify module registration
-        run: ./caddy list-modules | grep -E '^bifrost[[:space:]]*$'
+        run: |
+          ./caddy list-modules | grep -E '^bifrost[[:space:]]*$'
+          ./caddy list-modules | grep -E '^http\.reverse_proxy\.transport\.bifrost[[:space:]]*$'

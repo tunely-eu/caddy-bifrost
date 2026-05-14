@@ -1,0 +1,22 @@
+{
+	bifrost {
+		server {
+			connectors :8443 {
+				tls public.example.com
+				client home {
+					token {$HOME_TOKEN}
+					policy replace_existing
+					max_streams 100
+				}
+			}
+		}
+	}
+}
+
+home.example.com {
+	reverse_proxy http://home {
+		transport bifrost {
+			endpoint home
+		}
+	}
+}

@@ -1,57 +1,76 @@
 # caddy-bifrost
 
-`caddy-bifrost` is an OSS Caddy app module for running Bifrost edge and agent
-runtimes inside Caddy.
+`caddy-bifrost` connects two Caddy instances through a firewall, NAT, DS-Lite, or CGNAT boundary.
 
-The module is intentionally Tunely-agnostic. Product-specific API lookups belong
-in a separate module, such as `apps.tunely`, by implementing Bifrost control-plane
-providers around the same core APIs.
+Run the `server` runtime on the reachable Caddy instance and the `client` runtime next to the private Caddy instance. The private side dials out to the public side, then public Caddy can reach private upstreams through Bifrost without opening inbound ports on the private network.
 
-## Install
+The module is intentionally product-agnostic. It does not know about Tunely accounts, billing, route APIs, dashboards, or DNS ownership. Product-specific control planes should configure Caddy and Bifrost around this module.
 
-Caddy modules are distributed as Go modules. Build a Caddy binary with `xcaddy`
-and pin the module by Git tag:
+## Modes
 
-```sh
-xcaddy build \
-  --with github.com/tunely-eu/caddy-bifrost@v0.1.0
-```
+### Public TLS
 
-Use the prebuilt Docker image:
-
-```sh
-docker pull ghcr.io/tunely-eu/caddy-bifrost:v0.1.0
-```
-
-Build Caddy with this module plus any other Caddy plugins you need:
-
-```sh
-xcaddy build \
-  --with github.com/tunely-eu/caddy-bifrost@v0.1.0 \
-  --with github.com/mholt/caddy-l4@latest
-```
-
-The GHCR image is only a convenience build. It contains Caddy's standard modules
-and `caddy-bifrost`; users who need additional Caddy modules should build their
-own binary or image with `xcaddy`.
-
-`caddy-l4` is not required for the standard edge path. `caddy-bifrost` opens the
-public edge listener itself, reads ClientHello SNI without terminating TLS, and
-forwards raw TCP bytes through Bifrost.
-
-## Caddyfile
-
-`caddy-bifrost` registers one Caddy app named `bifrost`. Configure it in the
-Caddyfile global options block.
-
-Edge:
+Public Caddy terminates browser TLS and uses Bifrost as a `reverse_proxy` transport to a private Caddy upstream.
 
 ```caddyfile
 {
 	bifrost {
-		edge {
+		server {
 			connectors :8443 {
-				tls /certs/bifrost/server.crt /certs/bifrost/server.key
+				tls public.example.com
+				client home {
+					token {$HOME_TOKEN}
+					policy replace_existing
+					max_streams 100
+				}
+			}
+		}
+	}
+}
+
+home.example.com {
+	reverse_proxy http://home {
+		transport bifrost {
+			endpoint home
+		}
+	}
+}
+```
+
+Private Caddy:
+
+```caddyfile
+{
+	bifrost {
+		client {
+			connect public.example.com:8443
+			token {$HOME_TOKEN}
+			endpoint home
+			forward 127.0.0.1:8080
+			tls_server_name public.example.com
+		}
+	}
+}
+
+:8080 {
+	reverse_proxy 127.0.0.1:8123
+}
+```
+
+This mode keeps the public Caddy experience familiar: routes, access logs, retries, header handling, and TLS automation stay in normal Caddy HTTP config.
+
+### Private TLS / SNI Passthrough
+
+Public Caddy reads ClientHello SNI without terminating browser TLS and forwards the raw stream through Bifrost. Private Caddy terminates browser TLS.
+
+Public Caddy:
+
+```caddyfile
+{
+	bifrost {
+		server {
+			connectors :8443 {
+				tls public.example.com
 				client home {
 					token {$HOME_TOKEN}
 					policy replace_existing
@@ -59,7 +78,7 @@ Edge:
 				}
 			}
 
-			ingress :443 {
+			passthrough :443 {
 				route_sni home.example.com home
 				route_sni files.example.com home
 			}
@@ -68,32 +87,60 @@ Edge:
 }
 ```
 
-Agent:
+Private Caddy:
 
 ```caddyfile
 {
 	bifrost {
-		agent {
-			connect edge.example.com:8443
+		client {
+			connect public.example.com:8443
 			token {$HOME_TOKEN}
 			endpoint home
-			forward unix//run/tunely/agent-https.sock
+			forward 127.0.0.1:9443
+			tls_server_name public.example.com
 		}
 	}
 }
 
-https://home.example.com {
-	bind unix//run/tunely/agent-https.sock
-	reverse_proxy unix//run/home/app.sock
+home.example.com {
+	bind 127.0.0.1
+	reverse_proxy 127.0.0.1:8123
 }
 ```
 
-The edge app reads ClientHello SNI and forwards raw TCP bytes over Bifrost. It
-does not terminate public TLS. The agent app forwards raw streams into the
-configured local Caddy ingress, where normal Caddy TLS and `reverse_proxy` routes
-apply.
+Use this mode when the application TLS session must terminate only on the private side.
 
-Only one runtime can be configured per Caddy process: `edge` or `agent`.
+## Connector TLS
+
+`connectors.tls <subject>` uses Caddy's TLS app for the Bifrost connector listener certificate.
+
+```caddyfile
+connectors :8443 {
+	tls public.example.com
+	client home {
+		token {$HOME_TOKEN}
+	}
+}
+```
+
+Issuer selection, DNS-01, account email, storage, and local/internal certificates are configured through normal Caddy TLS configuration. The standalone `bifrost-server` still uses certificate files; ACME support is intentionally Caddy-specific and lives in this module.
+
+If `passthrough :443` owns port 443, use DNS-01 or HTTP-01 on port 80 for the connector certificate. TLS-ALPN-01 on port 443 would collide with the passthrough listener.
+
+## Install
+
+Build Caddy with `xcaddy`:
+
+```sh
+xcaddy build \
+  --with github.com/tunely-eu/caddy-bifrost@v0.2.0
+```
+
+Use the prebuilt Docker image:
+
+```sh
+docker pull ghcr.io/tunely-eu/caddy-bifrost:v0.2.0
+```
 
 ## JSON
 
@@ -101,11 +148,9 @@ Only one runtime can be configured per Caddy process: `edge` or `agent`.
 {
   "apps": {
     "bifrost": {
-      "edge": {
+      "server": {
         "connector_listen": ":8443",
-        "ingress_listen": ":443",
-        "tls_cert_file": "/certs/bifrost/server.crt",
-        "tls_key_file": "/certs/bifrost/server.key",
+        "tls_subject": "public.example.com",
         "clients": [
           {
             "endpoint": "home",
@@ -113,16 +158,25 @@ Only one runtime can be configured per Caddy process: `edge` or `agent`.
             "policy": "replace_existing",
             "max_streams": 100
           }
-        ],
-        "routes": [
-          {
-            "server_name": "home.example.com",
-            "endpoint": "home"
-          }
         ]
       }
     }
   }
+}
+```
+
+`reverse_proxy` transport JSON:
+
+```json
+{
+  "handler": "reverse_proxy",
+  "transport": {
+    "protocol": "bifrost",
+    "endpoint": "home"
+  },
+  "upstreams": [
+    {"dial": "home"}
+  ]
 }
 ```
 
@@ -132,5 +186,5 @@ Only one runtime can be configured per Caddy process: `edge` or `agent`.
 go test ./...
 go test -race ./...
 xcaddy build --with github.com/tunely-eu/caddy-bifrost=.
-./caddy list-modules | grep '^bifrost$'
+./caddy list-modules | grep -E '^(bifrost|http.reverse_proxy.transport.bifrost)$'
 ```

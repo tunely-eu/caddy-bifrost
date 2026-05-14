@@ -1,8 +1,8 @@
 {
 	bifrost {
-		edge {
+		server {
 			connectors :8443 {
-				tls /certs/bifrost/server.crt /certs/bifrost/server.key
+				tls public.example.com
 				client home {
 					token {$HOME_TOKEN}
 					policy replace_existing
@@ -10,7 +10,7 @@
 				}
 			}
 
-			ingress :443 {
+			passthrough :443 {
 				route_sni home.example.com home
 				route_sni files.example.com home
 			}
