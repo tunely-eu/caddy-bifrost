@@ -88,7 +88,7 @@ func (s *Server) caddyTLSConfig(ctx caddy.Context) (*tls.Config, error) {
 		return nil, fmt.Errorf("getting tls app: %w", err)
 	}
 	tlsApp := tlsAppIface.(*caddytls.TLS)
-	tlsApp.RegisterServerNames([]string{s.TLSSubject})
+	tlsApp.RegisterServerNames([]string{s.TLSSubject}, []string{bifrost.ALPN})
 	if err := tlsApp.Manage(map[string]struct{}{s.TLSSubject: {}}); err != nil {
 		return nil, fmt.Errorf("managing connector certificate %q: %w", s.TLSSubject, err)
 	}

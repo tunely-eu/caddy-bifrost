@@ -132,14 +132,14 @@ If `passthrough :443` owns port 443, use DNS-01 or HTTP-01 on port 80 for the co
 Build Caddy with `xcaddy`:
 
 ```sh
-xcaddy build \
-  --with github.com/tunely-eu/caddy-bifrost@v0.2.0
+xcaddy build v2.11.3 \
+  --with github.com/tunely-eu/caddy-bifrost@v0.2.1
 ```
 
 Use the prebuilt Docker image:
 
 ```sh
-docker pull ghcr.io/tunely-eu/caddy-bifrost:v0.2.0
+docker pull ghcr.io/tunely-eu/caddy-bifrost:v0.2.1
 ```
 
 ## JSON
@@ -185,6 +185,6 @@ docker pull ghcr.io/tunely-eu/caddy-bifrost:v0.2.0
 ```sh
 go test ./...
 go test -race ./...
-xcaddy build --with github.com/tunely-eu/caddy-bifrost=.
-./caddy list-modules | grep -E '^(bifrost|http.reverse_proxy.transport.bifrost)$'
+make xcaddy-build
+make verify-module
 ```

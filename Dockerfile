@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-ARG CADDY_VERSION=2.11.2
+ARG CADDY_VERSION
 
 FROM caddy:${CADDY_VERSION}-builder AS builder
 
-ARG CADDY_VERSION=2.11.2
+ARG CADDY_VERSION
 ARG CADDY_BIFROST_WITH=github.com/tunely-eu/caddy-bifrost=.
 
 WORKDIR /src
