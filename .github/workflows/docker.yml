@@ -2,7 +2,6 @@ name: Docker
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
 
 permissions:
@@ -13,7 +12,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     env:
-      CADDY_BIFROST_WITH: ${{ startsWith(github.ref, 'refs/tags/') && format('github.com/tunely-eu/caddy-bifrost@{0}', github.ref_name) || 'github.com/tunely-eu/caddy-bifrost=.' }}
+      CADDY_BIFROST_WITH: github.com/tunely-eu/caddy-bifrost@${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve Caddy version
@@ -34,10 +33,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/caddy-bifrost
           tags: |
-            type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
       - uses: docker/build-push-action@v6
         with:
           context: .

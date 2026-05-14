@@ -133,13 +133,13 @@ Build Caddy with `xcaddy`:
 
 ```sh
 xcaddy build v2.11.3 \
-  --with github.com/tunely-eu/caddy-bifrost@v0.2.1
+  --with github.com/tunely-eu/caddy-bifrost@v0.2.3
 ```
 
 Use the prebuilt Docker image:
 
 ```sh
-docker pull ghcr.io/tunely-eu/caddy-bifrost:v0.2.1
+docker pull ghcr.io/tunely-eu/caddy-bifrost:0.2.3
 ```
 
 ## JSON
