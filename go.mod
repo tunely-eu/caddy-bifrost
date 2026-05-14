@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/caddyserver/caddy/v2 v2.11.3
-	github.com/tunely-eu/bifrost v0.2.0
+	github.com/tunely-eu/bifrost v0.2.1
 	go.uber.org/zap v1.27.1
 )
 

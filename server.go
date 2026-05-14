@@ -128,21 +128,38 @@ func (s *Server) Start() error {
 	ready := make(chan net.Addr, 1)
 	serverErr := make(chan error, 1)
 
+	connectorListener, err := listenCaddy(ctx, s.ConnectorListen)
+	if err != nil {
+		cancel()
+		return err
+	}
+
 	server, err := bifrost.NewServer(bifrost.ServerConfig{
 		Listen:    s.ConnectorListen,
 		TLSConfig: s.TLSConfig,
 		Clients:   mustStaticClients(s.Clients),
 	}, bifrost.ServerOptions{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Listener: connectorListener,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Ready: func(addr net.Addr) {
 			ready <- addr
 		},
 	})
 	if err != nil {
+		_ = connectorListener.Close()
 		cancel()
 		return err
 	}
 	s.server = server
+
+	failStart := func(err error) error {
+		cancel()
+		if s.listener != nil {
+			_ = s.listener.Close()
+		}
+		s.wg.Wait()
+		return err
+	}
 
 	s.wg.Add(1)
 	go func() {
@@ -155,18 +172,15 @@ func (s *Server) Start() error {
 	select {
 	case <-ready:
 	case err := <-serverErr:
-		cancel()
-		return err
+		return failStart(err)
 	case <-time.After(5 * time.Second):
-		cancel()
-		return fmt.Errorf("bifrost connector listener did not become ready")
+		return failStart(fmt.Errorf("bifrost connector listener did not become ready"))
 	}
 
 	if s.Passthrough != "" {
-		listener, err := listenAddress(s.Passthrough)
+		listener, err := listenCaddy(ctx, s.Passthrough)
 		if err != nil {
-			cancel()
-			return err
+			return failStart(err)
 		}
 		s.listener = listener
 

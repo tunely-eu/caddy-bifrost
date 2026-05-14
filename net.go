@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
+
+	"github.com/caddyserver/caddy/v2"
 )
 
 var errClientHelloParsed = errors.New("client hello parsed")
@@ -67,9 +70,26 @@ func dialAddress(ctx context.Context, address string) (net.Conn, error) {
 	return dialer.DialContext(ctx, network, target)
 }
 
-func listenAddress(address string) (net.Listener, error) {
-	network, target := splitAddress(address)
-	return net.Listen(network, target)
+func listenCaddy(ctx context.Context, address string) (net.Listener, error) {
+	networkAddress, err := caddy.ParseNetworkAddress(address)
+	if err != nil {
+		return nil, err
+	}
+	if networkAddress.PortRangeSize() != 1 {
+		return nil, fmt.Errorf("listener address %q must resolve to exactly one listener", address)
+	}
+	listener, err := networkAddress.Listen(ctx, 0, net.ListenConfig{})
+	if err != nil {
+		return nil, err
+	}
+	streamListener, ok := listener.(net.Listener)
+	if !ok {
+		if closer, ok := listener.(io.Closer); ok {
+			_ = closer.Close()
+		}
+		return nil, fmt.Errorf("listener address %q did not create a stream listener", address)
+	}
+	return streamListener, nil
 }
 
 func splitAddress(address string) (string, string) {

@@ -153,6 +153,46 @@ func TestTransportReturnsErrorWithoutActiveEndpoint(t *testing.T) {
 	}
 }
 
+func TestServerStartCanOverlapConnectorAndPassthroughListeners(t *testing.T) {
+	dir := t.TempDir()
+	bifrostCert, bifrostKey, _ := writeTestCertFiles(t, dir, "localhost")
+	bifrostKeyPair, err := tls.LoadX509KeyPair(bifrostCert, bifrostKey)
+	if err != nil {
+		t.Fatalf("load bifrost cert: %v", err)
+	}
+
+	connectorAddr := freeTCPAddr(t)
+	passthroughAddr := freeTCPAddr(t)
+	newServer := func() *Server {
+		return &Server{
+			ConnectorListen: connectorAddr,
+			Passthrough:     passthroughAddr,
+			TLSConfig:       &tls.Config{Certificates: []tls.Certificate{bifrostKeyPair}},
+			Clients: []ClientAuth{
+				{
+					Endpoint:   "home",
+					Token:      "secret",
+					Policy:     "replace_existing",
+					MaxStreams: 10,
+				},
+			},
+			Routes: []SNIRoute{{ServerName: "home.example.com", Endpoint: "home"}},
+		}
+	}
+
+	first := newServer()
+	if err := first.Start(); err != nil {
+		t.Fatalf("first server start: %v", err)
+	}
+	defer first.Stop()
+
+	second := newServer()
+	if err := second.Start(); err != nil {
+		t.Fatalf("second server start: %v", err)
+	}
+	defer second.Stop()
+}
+
 func startTLSOrigin(t *testing.T, cert tls.Certificate) (string, func()) {
 	t.Helper()
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
