@@ -1,27 +1,27 @@
 # caddy-bifrost
 
-`caddy-bifrost` connects two Caddy instances through a firewall, NAT, DS-Lite, or CGNAT boundary.
+`caddy-bifrost` connects two Caddy instances across NAT, DS-Lite, CGNAT, or a firewall without opening inbound ports on the private network.
 
-Run the `server` runtime on the reachable Caddy instance and the `client` runtime next to the private Caddy instance. The private side dials out to the public side, then public Caddy can reach private upstreams through Bifrost without opening inbound ports on the private network.
+Put the `server` runtime on the public Caddy instance and the `client` runtime next to the private Caddy instance. The private side dials out to the public side, and public Caddy can then proxy requests through Bifrost as if the private service were a normal upstream.
 
-The module is intentionally product-agnostic. It does not know about Tunely accounts, billing, route APIs, dashboards, or DNS ownership. Product-specific control planes should configure Caddy and Bifrost around this module.
+## Quick Start: Public TLS
 
-## Modes
+This is the simplest setup for an existing Caddy user: public Caddy keeps handling HTTPS, routes, logs, retries, headers, and ACME. Bifrost only becomes the private upstream transport.
 
-### Public TLS
-
-Public Caddy terminates browser TLS and uses Bifrost as a `reverse_proxy` transport to a private Caddy upstream.
+Public Caddy:
 
 ```caddyfile
 {
 	bifrost {
 		server {
-			connectors :8443 {
+			connector :8443 {
 				tls public.example.com
-				client home {
+				endpoint home {
 					token {$HOME_TOKEN}
 					policy replace_existing
-					max_streams 100
+					limits {
+						max_streams 100
+					}
 				}
 			}
 		}
@@ -45,7 +45,6 @@ Private Caddy:
 		client {
 			connect public.example.com:8443
 			token {$HOME_TOKEN}
-			endpoint home
 			forward 127.0.0.1:8080
 			tls_server_name public.example.com
 		}
@@ -57,11 +56,26 @@ Private Caddy:
 }
 ```
 
-This mode keeps the public Caddy experience familiar: routes, access logs, retries, header handling, and TLS automation stay in normal Caddy HTTP config.
+Open TCP `8443` on the public host for the Bifrost connector. The private host only needs outbound access to `public.example.com:8443`.
 
-### Private TLS / SNI Passthrough
+## Install
 
-Public Caddy reads ClientHello SNI without terminating browser TLS and forwards the raw stream through Bifrost. Private Caddy terminates browser TLS.
+Build Caddy with `xcaddy`:
+
+```sh
+xcaddy build v2.11.3 \
+  --with github.com/tunely-eu/caddy-bifrost@v0.3.0
+```
+
+Or use the prebuilt image:
+
+```sh
+docker pull ghcr.io/tunely-eu/caddy-bifrost:0.3.0
+```
+
+## Private TLS / SNI Passthrough
+
+Use passthrough when browser TLS must terminate only on the private Caddy instance. Public Caddy reads ClientHello SNI, picks an endpoint, and forwards the raw TLS stream through Bifrost.
 
 Public Caddy:
 
@@ -69,12 +83,14 @@ Public Caddy:
 {
 	bifrost {
 		server {
-			connectors :8443 {
+			connector :8443 {
 				tls public.example.com
-				client home {
+				endpoint home {
 					token {$HOME_TOKEN}
 					policy replace_existing
-					max_streams 100
+					limits {
+						max_streams 100
+					}
 				}
 			}
 
@@ -95,7 +111,6 @@ Private Caddy:
 		client {
 			connect public.example.com:8443
 			token {$HOME_TOKEN}
-			endpoint home
 			forward 127.0.0.1:9443
 			tls_server_name public.example.com
 		}
@@ -108,39 +123,52 @@ home.example.com {
 }
 ```
 
-Use this mode when the application TLS session must terminate only on the private side.
+When `passthrough :443` owns port 443 on the public host, use DNS-01 or HTTP-01 on port 80 for the connector certificate. TLS-ALPN-01 on port 443 would collide with the passthrough listener.
 
-## Connector TLS
+## Configuration
 
-`connectors.tls <subject>` uses Caddy's TLS app for the Bifrost connector listener certificate.
+Server endpoints are admitted by token and identified by endpoint key:
 
 ```caddyfile
-connectors :8443 {
-	tls public.example.com
-	client home {
-		token {$HOME_TOKEN}
+endpoint home {
+	token {$HOME_TOKEN}
+	policy replace_existing
+	limits {
+		max_streams 100
+		max_bandwidth_bps 25000000
+		stream_idle_timeout 5m
 	}
 }
 ```
 
-Issuer selection, DNS-01, account email, storage, and local/internal certificates are configured through normal Caddy TLS configuration. The standalone `bifrost-server` still uses certificate files; ACME support is intentionally Caddy-specific and lives in this module.
+Available connection policies are `reject_if_exists`, `replace_existing`, and `allow_parallel`. Set `max_parallel` inside the endpoint when using `allow_parallel`.
 
-If `passthrough :443` owns port 443, use DNS-01 or HTTP-01 on port 80 for the connector certificate. TLS-ALPN-01 on port 443 would collide with the passthrough listener.
+Server guardrails expose Bifrost's session-wide safety limits:
 
-## Install
-
-Build Caddy with `xcaddy`:
-
-```sh
-xcaddy build v2.11.3 \
-  --with github.com/tunely-eu/caddy-bifrost@v0.2.3
+```caddyfile
+guardrails {
+	max_sessions 1000
+	max_streams_per_session 512
+	max_bandwidth_bps_per_session 100000000
+	min_stream_idle_timeout 30s
+	max_stream_idle_timeout 1h
+	max_headers 32
+	max_header_bytes 8192
+}
 ```
 
-Use the prebuilt Docker image:
+Runtime tuning is also available:
 
-```sh
-docker pull ghcr.io/tunely-eu/caddy-bifrost:0.2.3
+```caddyfile
+runtime {
+	handshake_timeout 10s
+	stream_copy_buffer_bytes 32768
+	tunnel_keepalive_interval 30s
+	tunnel_keepalive_timeout 10s
+}
 ```
+
+See [Configuration](docs/configuration.md) and [Security](docs/security.md) for the full reference.
 
 ## JSON
 
@@ -149,16 +177,22 @@ docker pull ghcr.io/tunely-eu/caddy-bifrost:0.2.3
   "apps": {
     "bifrost": {
       "server": {
-        "connector_listen": ":8443",
-        "tls_subject": "public.example.com",
-        "clients": [
-          {
-            "endpoint": "home",
-            "token": "secret",
-            "policy": "replace_existing",
-            "max_streams": 100
-          }
-        ]
+        "connector": {
+          "listen": ":8443",
+          "tls_subject": "public.example.com",
+          "endpoints": [
+            {
+              "key": "home",
+              "token": "secret",
+              "policy": "replace_existing",
+              "limits": {
+                "max_streams": 100,
+                "max_bandwidth_bps": 25000000,
+                "stream_idle_timeout": 300000000000
+              }
+            }
+          ]
+        }
       }
     }
   }

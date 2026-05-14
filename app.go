@@ -5,13 +5,22 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"go.uber.org/zap"
+
+	"github.com/tunely-eu/caddy-bifrost/internal/config"
+	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
 )
 
 type App struct {
-	Server *Server `json:"server,omitempty"`
-	Client *Client `json:"client,omitempty"`
+	Server *config.Server `json:"server,omitempty"`
+	Client *config.Client `json:"client,omitempty"`
 
-	logger *zap.Logger
+	logger  *zap.Logger
+	runtime appRuntime
+}
+
+type appRuntime interface {
+	Start() error
+	Stop() error
 }
 
 func (*App) CaddyModule() caddy.ModuleInfo {
@@ -23,54 +32,45 @@ func (*App) CaddyModule() caddy.ModuleInfo {
 
 func (a *App) Provision(ctx caddy.Context) error {
 	a.logger = ctx.Logger(a)
-	runtime, err := a.runtime()
+	runtimeName, err := a.runtimeName()
 	if err != nil {
 		return err
 	}
-	switch runtime {
+	switch runtimeName {
 	case "server":
-		a.Server.logger = a.logger.Named("server")
-		return a.Server.prepare(ctx)
+		server, err := runtime.NewServer(ctx, a.Server, a.logger.Named("server"))
+		if err != nil {
+			return err
+		}
+		a.runtime = server
+		return nil
 	case "client":
-		a.Client.logger = a.logger.Named("client")
-		return a.Client.prepare()
+		client, err := runtime.NewClient(a.Client, a.logger.Named("client"))
+		if err != nil {
+			return err
+		}
+		a.runtime = client
+		return nil
 	default:
-		return fmt.Errorf("unsupported bifrost runtime %q", runtime)
+		return fmt.Errorf("unsupported bifrost runtime %q", runtimeName)
 	}
 }
 
 func (a *App) Start() error {
-	runtime, err := a.runtime()
-	if err != nil {
-		return err
+	if a.runtime == nil {
+		return fmt.Errorf("bifrost app is not provisioned")
 	}
-	switch runtime {
-	case "server":
-		if a.Server.logger == nil {
-			a.Server.logger = zap.NewNop()
-		}
-		return a.Server.Start()
-	case "client":
-		if a.Client.logger == nil {
-			a.Client.logger = zap.NewNop()
-		}
-		return a.Client.Start()
-	default:
-		return fmt.Errorf("unsupported bifrost runtime %q", runtime)
-	}
+	return a.runtime.Start()
 }
 
 func (a *App) Stop() error {
-	if a.Server != nil {
-		return a.Server.Stop()
-	}
-	if a.Client != nil {
-		return a.Client.Stop()
+	if a.runtime != nil {
+		return a.runtime.Stop()
 	}
 	return nil
 }
 
-func (a *App) runtime() (string, error) {
+func (a *App) runtimeName() (string, error) {
 	hasServer := a.Server != nil
 	hasClient := a.Client != nil
 	switch {

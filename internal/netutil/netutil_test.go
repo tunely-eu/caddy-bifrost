@@ -1,4 +1,4 @@
-package caddybifrost
+package netutil
 
 import (
 	"crypto/tls"
@@ -18,7 +18,7 @@ func TestPeekClientHelloServerNamePreservesBytes(t *testing.T) {
 	}
 	results := make(chan result, 1)
 	go func() {
-		serverName, replayConn, err := peekClientHelloServerName(serverConn)
+		serverName, replayConn, err := PeekClientHelloServerName(serverConn)
 		results <- result{serverName: serverName, conn: replayConn, err: err}
 	}()
 
@@ -35,7 +35,7 @@ func TestPeekClientHelloServerNamePreservesBytes(t *testing.T) {
 	select {
 	case got := <-results:
 		if got.err != nil {
-			t.Fatalf("peekClientHelloServerName: %v", got.err)
+			t.Fatalf("PeekClientHelloServerName: %v", got.err)
 		}
 		if got.serverName != "home.example.com" {
 			t.Fatalf("serverName = %q", got.serverName)

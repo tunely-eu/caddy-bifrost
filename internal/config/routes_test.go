@@ -1,4 +1,4 @@
-package caddybifrost
+package config
 
 import "testing"
 

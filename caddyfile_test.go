@@ -2,7 +2,6 @@ package caddybifrost
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"testing"
 	"time"
@@ -11,19 +10,40 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
-	"github.com/tunely-eu/bifrost"
+
+	"github.com/tunely-eu/caddy-bifrost/internal/config"
 )
 
 func TestAppUnmarshalCaddyfileServer(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
 	server {
-		connectors :8443 {
+		connector :8443 {
 			tls public.example.com
-			client home {
+			endpoint home {
 				token secret
-				policy replace_existing
-				max_streams 100
+				policy allow_parallel
+				max_parallel 2
+				limits {
+					max_streams 100
+					max_bandwidth_bps 25000000
+					stream_idle_timeout 5m
+				}
 			}
+		}
+		guardrails {
+			max_sessions 1000
+			max_streams_per_session 512
+			max_bandwidth_bps_per_session 100000000
+			min_stream_idle_timeout 30s
+			max_stream_idle_timeout 1h
+			max_headers 32
+			max_header_bytes 8192
+		}
+		runtime {
+			handshake_timeout 10s
+			stream_copy_buffer_bytes 32768
+			tunnel_keepalive_interval 30s
+			tunnel_keepalive_timeout 10s
 		}
 		passthrough :443 {
 			route_sni home.example.com home
@@ -39,26 +59,36 @@ func TestAppUnmarshalCaddyfileServer(t *testing.T) {
 		t.Fatal("expected server runtime")
 	}
 	server := app.Server
-	if server.ConnectorListen != ":8443" {
-		t.Fatalf("connector listen = %q", server.ConnectorListen)
+	if server.Connector.Listen != ":8443" {
+		t.Fatalf("connector listen = %q", server.Connector.Listen)
 	}
-	if server.TLSSubject != "public.example.com" {
-		t.Fatalf("tls subject = %q", server.TLSSubject)
+	if server.Connector.TLSSubject != "public.example.com" {
+		t.Fatalf("tls subject = %q", server.Connector.TLSSubject)
 	}
-	if server.Passthrough != ":443" {
-		t.Fatalf("passthrough = %q", server.Passthrough)
+	if len(server.Connector.Endpoints) != 1 {
+		t.Fatalf("endpoints = %d", len(server.Connector.Endpoints))
 	}
-	if len(server.Clients) != 1 {
-		t.Fatalf("clients = %d", len(server.Clients))
+	endpoint := server.Connector.Endpoints[0]
+	if endpoint.Key != "home" || endpoint.Token != "secret" {
+		t.Fatalf("endpoint = %#v", endpoint)
 	}
-	if server.Clients[0].Endpoint != "home" || server.Clients[0].Token != "secret" {
-		t.Fatalf("client = %#v", server.Clients[0])
+	if endpoint.Policy != "allow_parallel" || endpoint.MaxParallel != 2 {
+		t.Fatalf("endpoint policy = %#v", endpoint)
 	}
-	if server.Clients[0].Policy != "replace_existing" || server.Clients[0].MaxStreams != 100 {
-		t.Fatalf("client policy/limits = %#v", server.Clients[0])
+	if endpoint.Limits.MaxStreams != 100 || endpoint.Limits.MaxBandwidthBPS != 25000000 {
+		t.Fatalf("endpoint limits = %#v", endpoint.Limits)
 	}
-	if len(server.Routes) != 2 {
-		t.Fatalf("routes = %d", len(server.Routes))
+	if time.Duration(endpoint.Limits.StreamIdleTimeout) != 5*time.Minute {
+		t.Fatalf("stream idle timeout = %s", time.Duration(endpoint.Limits.StreamIdleTimeout))
+	}
+	if server.Guardrails.MaxHeaderBytes != 8192 || time.Duration(server.Guardrails.MaxStreamIdleTimeout) != time.Hour {
+		t.Fatalf("guardrails = %#v", server.Guardrails)
+	}
+	if server.Runtime.StreamCopyBufferBytes != 32768 || time.Duration(server.Runtime.HandshakeTimeout) != 10*time.Second {
+		t.Fatalf("runtime = %#v", server.Runtime)
+	}
+	if server.Passthrough.Listen != ":443" || len(server.Passthrough.Routes) != 2 {
+		t.Fatalf("passthrough = %#v", server.Passthrough)
 	}
 }
 
@@ -67,7 +97,6 @@ func TestAppUnmarshalCaddyfileClient(t *testing.T) {
 	client {
 		connect public.example.com:8443
 		token secret
-		endpoint home
 		forward 127.0.0.1:8080
 		tls_ca_file /certs/ca.crt
 		tls_server_name public.example.com
@@ -85,8 +114,8 @@ func TestAppUnmarshalCaddyfileClient(t *testing.T) {
 	if client.Connect != "public.example.com:8443" {
 		t.Fatalf("connect = %q", client.Connect)
 	}
-	if client.Token != "secret" || client.Endpoint != "home" {
-		t.Fatalf("identity = %q %q", client.Token, client.Endpoint)
+	if client.Token != "secret" {
+		t.Fatalf("token = %q", client.Token)
 	}
 	if client.Forward != "127.0.0.1:8080" {
 		t.Fatalf("forward = %q", client.Forward)
@@ -121,12 +150,16 @@ func TestCaddyfileAdaptServerAppAndTransport(t *testing.T) {
 	configJSON := adaptCaddyfile(t, `{
 	bifrost {
 		server {
-			connectors :8443 {
+			connector :8443 {
 				tls public.example.com
-				client home {
+				endpoint home {
 					token secret
 					policy replace_existing
-					max_streams 100
+					limits {
+						max_streams 100
+						max_bandwidth_bps 25000000
+						stream_idle_timeout 5m
+					}
 				}
 			}
 			passthrough :443 {
@@ -155,8 +188,8 @@ home.example.com {
 	if cfg.Apps.Bifrost.Server == nil || cfg.Apps.Bifrost.Client != nil {
 		t.Fatalf("runtime = %#v", cfg.Apps.Bifrost)
 	}
-	if cfg.Apps.Bifrost.Server.Clients[0].Endpoint != "home" {
-		t.Fatalf("server client = %#v", cfg.Apps.Bifrost.Server.Clients[0])
+	if cfg.Apps.Bifrost.Server.Connector.Endpoints[0].Key != "home" {
+		t.Fatalf("server endpoint = %#v", cfg.Apps.Bifrost.Server.Connector.Endpoints[0])
 	}
 	if !bytes.Contains(configJSON, []byte(`"protocol":"bifrost"`)) {
 		t.Fatalf("adapted config does not include bifrost transport: %s", configJSON)
@@ -169,7 +202,6 @@ func TestCaddyfileAdaptClientApp(t *testing.T) {
 		client {
 			connect public.example.com:8443
 			token secret
-			endpoint home
 			forward 127.0.0.1:8080
 		}
 	}
@@ -191,21 +223,11 @@ func TestCaddyfileAdaptClientApp(t *testing.T) {
 	}
 }
 
-func TestAppRejectsMultipleRuntimes(t *testing.T) {
-	d := caddyfile.NewTestDispenser(`bifrost {
-	server {}
-	client {}
-}`)
-	var app App
-	if err := app.UnmarshalCaddyfile(d); err == nil {
-		t.Fatal("expected multiple runtime error")
-	}
-}
-
-func TestAppRejectsRemovedRuntimeNames(t *testing.T) {
+func TestRemovedDirectivesAreRejected(t *testing.T) {
 	for _, input := range []string{
-		`bifrost { edge {} }`,
-		`bifrost { agent {} }`,
+		`bifrost { server { connectors :8443 {} } }`,
+		`bifrost { server { connector :8443 { client home { token secret } } } }`,
+		`bifrost { client { endpoint home } }`,
 	} {
 		d := caddyfile.NewTestDispenser(input)
 		var app App
@@ -215,37 +237,39 @@ func TestAppRejectsRemovedRuntimeNames(t *testing.T) {
 	}
 }
 
+func TestAppRejectsMultipleRuntimes(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`bifrost {
+	server {}
+client {}
+}`)
+	var app App
+	if err := app.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected multiple runtime error")
+	}
+}
+
 func TestAppRuntimeValidation(t *testing.T) {
-	if _, err := (&App{}).runtime(); err == nil {
+	if _, err := (&App{}).runtimeName(); err == nil {
 		t.Fatal("expected missing runtime error")
 	}
-	if _, err := (&App{Server: &Server{}, Client: &Client{}}).runtime(); err == nil {
+	if _, err := (&App{Server: appServerConfig(), Client: appClientConfig()}).runtimeName(); err == nil {
 		t.Fatal("expected multiple runtime error")
 	}
 }
 
 func TestPrepareValidationErrors(t *testing.T) {
-	if err := (&Server{}).prepare(caddy.Context{}); err == nil {
-		t.Fatal("expected server validation error")
+	if err := appServerConfig().Validate(); err != nil {
+		t.Fatalf("valid server config: %v", err)
 	}
-	if err := (&Client{}).prepare(); err == nil {
-		t.Fatal("expected client validation error")
+	if err := (&App{Server: appServerConfig()}).Start(); err == nil {
+		t.Fatal("expected start before provision error")
 	}
-	server := &Server{
-		TLSConfig:   &tls.Config{},
-		Clients:     []ClientAuth{{Endpoint: "home", Token: "secret"}},
-		Passthrough: ":443",
-		Routes: []SNIRoute{
-			{ServerName: "home.example.com", Endpoint: "home"},
-			{ServerName: "HOME.EXAMPLE.COM.", Endpoint: "home"},
-		},
-	}
-	if err := server.prepare(caddy.Context{}); err == nil {
-		t.Fatal("expected duplicate route error")
+	if err := appClientConfig().Validate(); err != nil {
+		t.Fatalf("valid client config: %v", err)
 	}
 }
 
-func TestServerPrepareUsesCaddyTLSApp(t *testing.T) {
+func TestServerProvisionUsesCaddyTLSApp(t *testing.T) {
 	configJSON := adaptCaddyfile(t, `{
 	local_certs
 }`)
@@ -257,19 +281,12 @@ func TestServerPrepareUsesCaddyTLSApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProvisionContext: %v", err)
 	}
-	server := &Server{
-		ConnectorListen: "127.0.0.1:0",
-		TLSSubject:      "localhost",
-		Clients:         []ClientAuth{{Endpoint: "home", Token: "secret"}},
+	app := &App{Server: appServerConfig()}
+	if err := app.Provision(ctx); err != nil {
+		t.Fatalf("Provision: %v", err)
 	}
-	if err := server.prepare(ctx); err != nil {
-		t.Fatalf("prepare: %v", err)
-	}
-	if server.TLSConfig == nil {
-		t.Fatal("expected caddy-managed TLS config")
-	}
-	if !containsString(server.TLSConfig.NextProtos, bifrost.ALPN) {
-		t.Fatalf("connector ALPN missing from %v", server.TLSConfig.NextProtos)
+	if app.runtime == nil {
+		t.Fatal("expected runtime")
 	}
 }
 
@@ -291,16 +308,24 @@ func assertBifrostConfig(t *testing.T, configJSON []byte) {
 	if !bytes.Contains(configJSON, []byte(`"bifrost"`)) {
 		t.Fatalf("adapted config does not include bifrost app: %s", configJSON)
 	}
-	if bytes.Contains(configJSON, []byte(`"edge":`)) || bytes.Contains(configJSON, []byte(`"agent":`)) || bytes.Contains(configJSON, []byte(`"ingress":`)) {
+	if bytes.Contains(configJSON, []byte(`"edge"`)) || bytes.Contains(configJSON, []byte(`"agent"`)) {
 		t.Fatalf("adapted config contains removed names: %s", configJSON)
 	}
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
+func appServerConfig() *config.Server {
+	return &config.Server{
+		Connector: config.Connector{
+			TLSSubject: "localhost",
+			Endpoints:  []config.Endpoint{{Key: "home", Token: "secret"}},
+		},
 	}
-	return false
+}
+
+func appClientConfig() *config.Client {
+	return &config.Client{
+		Connect: "public.example.com:8443",
+		Token:   "secret",
+		Forward: "127.0.0.1:8080",
+	}
 }

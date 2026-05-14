@@ -1,4 +1,4 @@
-package caddybifrost
+package netutil
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 
 var errClientHelloParsed = errors.New("client hello parsed")
 
-func peekClientHelloServerName(conn net.Conn) (string, net.Conn, error) {
+func PeekClientHelloServerName(conn net.Conn) (string, net.Conn, error) {
 	var replay bytes.Buffer
 	peekConn := &readWriteConn{
 		Conn: conn,
@@ -64,13 +64,13 @@ func (c *prefixConn) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-func dialAddress(ctx context.Context, address string) (net.Conn, error) {
+func DialAddress(ctx context.Context, address string) (net.Conn, error) {
 	var dialer net.Dialer
-	network, target := splitAddress(address)
+	network, target := SplitAddress(address)
 	return dialer.DialContext(ctx, network, target)
 }
 
-func listenCaddy(ctx context.Context, address string) (net.Listener, error) {
+func ListenCaddy(ctx context.Context, address string) (net.Listener, error) {
 	networkAddress, err := caddy.ParseNetworkAddress(address)
 	if err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func listenCaddy(ctx context.Context, address string) (net.Listener, error) {
 	return streamListener, nil
 }
 
-func splitAddress(address string) (string, string) {
+func SplitAddress(address string) (string, string) {
 	switch {
 	case strings.HasPrefix(address, "unix//"):
 		return "unix", strings.TrimPrefix(address, "unix//")
@@ -107,12 +107,14 @@ func splitAddress(address string) (string, string) {
 	}
 }
 
-func closeOnContext(ctx context.Context, conn net.Conn) func() {
+func CloseOnContext(ctx context.Context, conns ...net.Conn) func() {
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			_ = conn.Close()
+			for _, conn := range conns {
+				_ = conn.Close()
+			}
 		case <-done:
 		}
 	}()

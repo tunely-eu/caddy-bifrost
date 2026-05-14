@@ -1,12 +1,14 @@
 {
 	bifrost {
 		server {
-			connectors :8443 {
+			connector :8443 {
 				tls public.example.com
-				client home {
+				endpoint home {
 					token {$HOME_TOKEN}
 					policy replace_existing
-					max_streams 100
+					limits {
+						max_streams 100
+					}
 				}
 			}
 		}

@@ -1,14 +1,13 @@
 package caddybifrost
 
 import (
-	"context"
 	"fmt"
-	"net"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/caddyserver/caddy/v2"
+
+	"github.com/tunely-eu/caddy-bifrost/internal/config"
+	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
 )
 
 type Transport struct {
@@ -16,8 +15,7 @@ type Transport struct {
 	App         string         `json:"app,omitempty"`
 	DialTimeout caddy.Duration `json:"dial_timeout,omitempty"`
 
-	server    *Server
-	transport *http.Transport
+	transport *runtime.Transport
 }
 
 func (*Transport) CaddyModule() caddy.ModuleInfo {
@@ -28,30 +26,35 @@ func (*Transport) CaddyModule() caddy.ModuleInfo {
 }
 
 func (t *Transport) Provision(ctx caddy.Context) error {
-	t.Endpoint = strings.TrimSpace(t.Endpoint)
-	if t.Endpoint == "" {
-		return fmt.Errorf("endpoint is required")
+	cfg := config.Transport{
+		Endpoint:    t.Endpoint,
+		App:         t.App,
+		DialTimeout: t.DialTimeout,
 	}
-	if t.App == "" {
-		t.App = "bifrost"
+	if err := cfg.Validate(); err != nil {
+		return err
 	}
-	app, err := ctx.App(t.App)
+	t.Endpoint = cfg.Endpoint
+	t.App = cfg.App
+	t.DialTimeout = cfg.DialTimeout
+
+	app, err := ctx.App(cfg.App)
 	if err != nil {
-		return fmt.Errorf("getting %s app: %w", t.App, err)
+		return fmt.Errorf("getting %s app: %w", cfg.App, err)
 	}
 	bifrostApp, ok := app.(*App)
 	if !ok {
-		return fmt.Errorf("%s app has unexpected type %T", t.App, app)
+		return fmt.Errorf("%s app has unexpected type %T", cfg.App, app)
 	}
-	if bifrostApp.Server == nil {
-		return fmt.Errorf("%s app must be configured with server runtime", t.App)
+	server, ok := bifrostApp.runtime.(*runtime.Server)
+	if !ok {
+		return fmt.Errorf("%s app must be configured with server runtime", cfg.App)
 	}
-	t.server = bifrostApp.Server
-	t.transport = &http.Transport{
-		DialContext:       t.dialContext,
-		DisableKeepAlives: false,
-		ForceAttemptHTTP2: false,
+	transport, err := runtime.NewTransport(cfg, server)
+	if err != nil {
+		return err
 	}
+	t.transport = transport
 	return nil
 }
 
@@ -70,21 +73,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func (t *Transport) Cleanup() error {
 	if t.transport != nil {
-		t.transport.CloseIdleConnections()
+		return t.transport.Cleanup()
 	}
 	return nil
-}
-
-func (t *Transport) dialContext(ctx context.Context, _, _ string) (net.Conn, error) {
-	if t.server == nil {
-		return nil, fmt.Errorf("bifrost server app is not configured")
-	}
-	if t.DialTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(t.DialTimeout))
-		defer cancel()
-	}
-	return t.server.OpenStream(ctx, t.Endpoint)
 }
 
 var (

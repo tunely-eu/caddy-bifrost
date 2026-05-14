@@ -16,8 +16,8 @@ make xcaddy-build
 make verify-module
 ```
 
-The module should stay generic and Tunely-agnostic. Tunely-specific control-plane
-integration belongs in a separate module.
+The module should stay generic and product-agnostic. Product-specific control-plane
+integration belongs outside this module.
 
 ## Pull Requests
 

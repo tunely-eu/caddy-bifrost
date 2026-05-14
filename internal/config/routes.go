@@ -1,14 +1,9 @@
-package caddybifrost
+package config
 
 import (
 	"fmt"
 	"strings"
 )
-
-type SNIRoute struct {
-	ServerName string `json:"server_name,omitempty"`
-	Endpoint   string `json:"endpoint,omitempty"`
-}
 
 type RouteTable struct {
 	byServerName map[string]string
@@ -17,7 +12,7 @@ type RouteTable struct {
 func NewRouteTable(routes []SNIRoute) (RouteTable, error) {
 	table := RouteTable{byServerName: make(map[string]string, len(routes))}
 	for index, route := range routes {
-		serverName := normalizeServerName(route.ServerName)
+		serverName := NormalizeServerName(route.ServerName)
 		endpoint := strings.TrimSpace(route.Endpoint)
 		if serverName == "" {
 			return RouteTable{}, fmt.Errorf("routes[%d].server_name is required", index)
@@ -34,10 +29,10 @@ func NewRouteTable(routes []SNIRoute) (RouteTable, error) {
 }
 
 func (r RouteTable) Resolve(serverName string) (string, bool) {
-	endpoint, ok := r.byServerName[normalizeServerName(serverName)]
+	endpoint, ok := r.byServerName[NormalizeServerName(serverName)]
 	return endpoint, ok
 }
 
-func normalizeServerName(serverName string) string {
+func NormalizeServerName(serverName string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(serverName), "."))
 }
