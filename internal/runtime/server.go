@@ -24,6 +24,7 @@ type Server struct {
 	logger     *zap.Logger
 	tlsConfig  *tls.Config
 	accept     bifrost.AcceptProvider
+	observer   bifrost.Observer
 	resolverMu sync.RWMutex
 	resolver   PassthroughResolver
 
@@ -41,6 +42,7 @@ type PassthroughResolver interface {
 
 type ServerOptions struct {
 	AcceptProvider bifrost.AcceptProvider
+	Observer       bifrost.Observer
 }
 
 type ServerOption func(*ServerOptions)
@@ -48,6 +50,12 @@ type ServerOption func(*ServerOptions)
 func WithAcceptProvider(provider bifrost.AcceptProvider) ServerOption {
 	return func(opts *ServerOptions) {
 		opts.AcceptProvider = provider
+	}
+}
+
+func WithObserver(observer bifrost.Observer) ServerOption {
+	return func(opts *ServerOptions) {
+		opts.Observer = observer
 	}
 }
 
@@ -112,6 +120,7 @@ func NewServerWithTLSConfig(cfg *config.Server, tlsConfig *tls.Config, logger *z
 		logger:    logger,
 		tlsConfig: tlsConfig,
 		accept:    acceptProvider,
+		observer:  opts.Observer,
 	}, nil
 }
 
@@ -187,6 +196,7 @@ func (s *Server) Start() error {
 		Runtime:    s.cfg.Runtime.BifrostRuntime(),
 	}, bifrost.ServerOptions{
 		AcceptProvider: s.accept,
+		Observer:       s.observer,
 		Listener:       connectorListener,
 		Logger:         logging.Slog(s.logger.Named("bifrost")),
 		Ready: func(addr net.Addr) {

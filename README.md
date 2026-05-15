@@ -122,6 +122,46 @@ home.example.com {
 
 Listener-wrapper passthrough lets Caddy continue serving normal public-TLS routes on the same `:443` listener without creating HTTP routes or edge certificates for private TLS hostnames. The catch-all `:443 { abort }` block only keeps the listener alive when there are no public Caddy routes on that listener.
 
+## Metrics
+
+Enable Caddy's standard metrics support to expose Bifrost endpoint metrics from the same registry as Caddy's own HTTP and reverse proxy metrics. Caddy exposes metrics through the admin `/metrics` endpoint unless the admin API is disabled; use the HTTP `metrics` handler when you want a site route for scraping:
+
+```caddyfile
+{
+	metrics
+
+	bifrost {
+		server public.example.com {
+			endpoint home {
+				token {$HOME_TOKEN}
+			}
+		}
+	}
+}
+
+home.example.com {
+	reverse_proxy home {
+		transport bifrost
+	}
+}
+
+metrics.internal.example.com {
+	metrics /metrics
+}
+```
+
+For `reverse_proxy home { transport bifrost }`, Caddy's HTTP and reverse proxy metrics remain the primary request metrics; Bifrost adds endpoint, stream, and tunnel byte metrics. For SNI passthrough traffic, Bifrost stream and byte metrics cover traffic that does not enter Caddy's HTTP handler chain.
+
+Useful PromQL examples:
+
+```promql
+sum by(endpoint_key)(rate(bifrost_endpoint_stream_bytes_total[5m]))
+sum by(endpoint_key,direction)(rate(bifrost_endpoint_stream_bytes_total[5m]))
+bifrost_endpoint_active_sessions
+```
+
+Bifrost metric labels use endpoint keys and controlled direction/reason values only. Tokens, remote addresses, HTTP paths, and SNI names are not exported as Bifrost metric labels.
+
 ## Configuration
 
 Server endpoints are admitted by token and identified by endpoint key. Use `listen` only when the connector should not listen on the default `:8443` address:

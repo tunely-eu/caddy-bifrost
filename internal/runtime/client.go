@@ -17,20 +17,39 @@ import (
 type Client struct {
 	cfg      *config.Client
 	logger   *zap.Logger
+	observer bifrost.Observer
 	ctx      context.Context
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopOnce sync.Once
 }
 
-func NewClient(cfg *config.Client, logger *zap.Logger) (*Client, error) {
+type ClientOptions struct {
+	Observer bifrost.Observer
+}
+
+type ClientOption func(*ClientOptions)
+
+func WithClientObserver(observer bifrost.Observer) ClientOption {
+	return func(opts *ClientOptions) {
+		opts.Observer = observer
+	}
+}
+
+func NewClient(cfg *config.Client, logger *zap.Logger, options ...ClientOption) (*Client, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return &Client{cfg: cfg, logger: logger}, nil
+	var opts ClientOptions
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	return &Client{cfg: cfg, logger: logger, observer: opts.Observer}, nil
 }
 
 func (c *Client) Start() error {
@@ -53,6 +72,7 @@ func (c *Client) Start() error {
 			TLSInsecureSkipVerify: c.cfg.TLSInsecureSkipVerify,
 		}, bifrost.ClientOptions{
 			Logger:        logging.Slog(c.logger.Named("bifrost")),
+			Observer:      c.observer,
 			StreamHandler: c.handleStream,
 		})
 		if err != nil && ctx.Err() == nil {

@@ -145,6 +145,54 @@ reverse_proxy home {
 
 The upstream host is the Bifrost endpoint. `reverse_proxy home` and `reverse_proxy http://home` both use endpoint `home`; the host is not resolved through DNS by the Bifrost transport.
 
+## Metrics
+
+`caddy-bifrost` writes Bifrost endpoint metrics into Caddy's standard metrics registry. Enable Caddy metrics through the global option. Caddy exposes them through the admin `/metrics` endpoint unless the admin API is disabled; use the HTTP `metrics` handler when you want a site route for scraping:
+
+```caddyfile
+{
+	metrics
+
+	bifrost {
+		server public.example.com {
+			endpoint home {
+				token {$HOME_TOKEN}
+			}
+		}
+	}
+}
+
+home.example.com {
+	reverse_proxy home {
+		transport bifrost
+	}
+}
+
+metrics.internal.example.com {
+	metrics /metrics
+}
+```
+
+The exported Bifrost metrics are:
+
+- `bifrost_endpoint_active_sessions{endpoint_key}`
+- `bifrost_endpoint_streams_started_total{endpoint_key}`
+- `bifrost_endpoint_streams_ended_total{endpoint_key}`
+- `bifrost_endpoint_streams_rejected_total{endpoint_key,reason}`
+- `bifrost_endpoint_stream_bytes_total{endpoint_key,direction}`
+
+For `reverse_proxy home { transport bifrost }`, Caddy's HTTP and reverse proxy metrics remain the primary request metrics; Bifrost adds endpoint, stream, and tunnel byte metrics. For SNI passthrough traffic, Bifrost stream and byte metrics cover traffic that does not enter Caddy's HTTP handler chain.
+
+Useful PromQL examples:
+
+```promql
+sum by(endpoint_key)(rate(bifrost_endpoint_stream_bytes_total[5m]))
+sum by(endpoint_key,direction)(rate(bifrost_endpoint_stream_bytes_total[5m]))
+bifrost_endpoint_active_sessions
+```
+
+Metrics labels use stable endpoint keys and controlled reason/direction values. Tokens, remote addresses, HTTP paths, and SNI hostnames are not exported as Bifrost metric labels.
+
 ## Dynamic Accept Providers
 
 Standalone Caddyfile config uses static `endpoint` blocks for tunnel admission. Embedded builds can provide a custom module implementing `bifrost.AcceptProvider` through the `bifrost.accept_providers` namespace, or use the runtime `WithAcceptProvider` option directly.

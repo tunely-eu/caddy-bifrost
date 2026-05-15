@@ -47,6 +47,10 @@ func (a *App) Provision(ctx caddy.Context) error {
 	if runtimeName != "server" && len(a.AcceptProviderRaw) > 0 {
 		return fmt.Errorf("bifrost accept_provider requires server runtime")
 	}
+	observer, err := runtime.NewCaddyObserver(ctx.GetMetricsRegistry())
+	if err != nil {
+		return err
+	}
 	switch runtimeName {
 	case "server":
 		acceptProvider, err := a.loadAcceptProvider(ctx)
@@ -57,6 +61,7 @@ func (a *App) Provision(ctx caddy.Context) error {
 		if acceptProvider != nil {
 			options = append(options, runtime.WithAcceptProvider(acceptProvider))
 		}
+		options = append(options, runtime.WithObserver(observer))
 		server, err := runtime.NewServer(ctx, a.Server, a.logger.Named("server"), options...)
 		if err != nil {
 			return err
@@ -64,7 +69,7 @@ func (a *App) Provision(ctx caddy.Context) error {
 		a.runtime = server
 		return nil
 	case "client":
-		client, err := runtime.NewClient(a.Client, a.logger.Named("client"))
+		client, err := runtime.NewClient(a.Client, a.logger.Named("client"), runtime.WithClientObserver(observer))
 		if err != nil {
 			return err
 		}

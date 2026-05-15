@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/tunely-eu/bifrost"
 	"go.uber.org/zap"
 
@@ -59,6 +61,73 @@ func TestTransportProxiesHTTPOverBifrost(t *testing.T) {
 	}
 	response := testutil.WaitHTTPTransportResponse(t, transport, "http://home/")
 	assertOKResponse(t, response)
+}
+
+func TestTransportRecordsEndpointByteMetrics(t *testing.T) {
+	connectorAddr := testutil.FreeTCPAddr(t)
+	registry := prometheus.NewRegistry()
+	observer, err := runtime.NewCaddyObserver(registry)
+	if err != nil {
+		t.Fatalf("new observer: %v", err)
+	}
+	server, _, transport, _, stop := startServerClient(t, connectorAddr, false, runtime.WithObserver(observer))
+	defer stop()
+
+	if server == nil || transport == nil {
+		t.Fatal("expected server and transport")
+	}
+	response := testutil.WaitHTTPTransportResponse(t, transport, "http://home/")
+	assertOKResponse(t, response)
+	waitPrometheusMetricPositive(t, registry, "bifrost_endpoint_stream_bytes_total", map[string]string{
+		"endpoint_key": "home",
+		"direction":    string(bifrost.DirectionIngressToEndpoint),
+	})
+	waitPrometheusMetricPositive(t, registry, "bifrost_endpoint_stream_bytes_total", map[string]string{
+		"endpoint_key": "home",
+		"direction":    string(bifrost.DirectionEndpointToIngress),
+	})
+}
+
+func TestPassthroughRecordsEndpointByteMetrics(t *testing.T) {
+	connectorAddr := testutil.FreeTCPAddr(t)
+	passthroughAddr := testutil.FreeTCPAddr(t)
+	registry := prometheus.NewRegistry()
+	observer, err := runtime.NewCaddyObserver(registry)
+	if err != nil {
+		t.Fatalf("new observer: %v", err)
+	}
+	server, client, _, originCA, stop := startServerClient(t, connectorAddr, true, runtime.WithObserver(observer))
+	defer stop()
+
+	if server == nil || client == nil {
+		t.Fatal("expected server and client")
+	}
+	listener, err := net.Listen("tcp", passthroughAddr)
+	if err != nil {
+		t.Fatalf("listen passthrough test listener: %v", err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				_ = server.ProxyStream(context.Background(), "home", conn)
+			}()
+		}
+	}()
+	response := testutil.WaitHTTPSResponse(t, passthroughAddr, "home.example.com", originCA)
+	assertOKResponse(t, response)
+	waitPrometheusMetricPositive(t, registry, "bifrost_endpoint_stream_bytes_total", map[string]string{
+		"endpoint_key": "home",
+		"direction":    string(bifrost.DirectionIngressToEndpoint),
+	})
+	waitPrometheusMetricPositive(t, registry, "bifrost_endpoint_stream_bytes_total", map[string]string{
+		"endpoint_key": "home",
+		"direction":    string(bifrost.DirectionEndpointToIngress),
+	})
 }
 
 func TestServerClientUsesInjectedAcceptProvider(t *testing.T) {
@@ -217,7 +286,7 @@ func TestCaddyLifecycleLoadReloadStopReleasesListeners(t *testing.T) {
 	assertTCPListenAvailable(t, httpsAddr)
 }
 
-func startServerClient(t *testing.T, connectorAddr string, originTLS bool) (*runtime.Server, *runtime.Client, http.RoundTripper, []byte, func()) {
+func startServerClient(t *testing.T, connectorAddr string, originTLS bool, options ...runtime.ServerOption) (*runtime.Server, *runtime.Client, http.RoundTripper, []byte, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	bifrostCert, bifrostKey, bifrostCA := testutil.WriteTestCertFiles(t, dir, "localhost")
@@ -255,7 +324,7 @@ func startServerClient(t *testing.T, connectorAddr string, originTLS bool) (*run
 			},
 		},
 	}
-	server, err := runtime.NewServerWithTLSConfig(serverConfig, &tls.Config{Certificates: []tls.Certificate{bifrostKeyPair}}, zap.NewNop())
+	server, err := runtime.NewServerWithTLSConfig(serverConfig, &tls.Config{Certificates: []tls.Certificate{bifrostKeyPair}}, zap.NewNop(), options...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -396,6 +465,62 @@ func assertOKResponse(t *testing.T, response []byte) {
 	if !bytes.Contains(response, []byte("bifrost-ok")) {
 		t.Fatalf("response body = %q", response)
 	}
+}
+
+func waitPrometheusMetricPositive(t *testing.T, registry *prometheus.Registry, name string, labels map[string]string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var lastValue float64
+	for time.Now().Before(deadline) {
+		value, ok, err := prometheusMetricValue(registry, name, labels)
+		if err != nil {
+			t.Fatalf("gather metrics: %v", err)
+		}
+		if ok {
+			lastValue = value
+			if value > 0 {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("metric %s%v = %v, want > 0", name, labels, lastValue)
+}
+
+func prometheusMetricValue(registry *prometheus.Registry, name string, labels map[string]string) (float64, bool, error) {
+	families, err := registry.Gather()
+	if err != nil {
+		return 0, false, err
+	}
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			if !prometheusLabelsEqual(metric, labels) {
+				continue
+			}
+			if metric.Gauge != nil {
+				return metric.Gauge.GetValue(), true, nil
+			}
+			if metric.Counter != nil {
+				return metric.Counter.GetValue(), true, nil
+			}
+		}
+	}
+	return 0, false, nil
+}
+
+func prometheusLabelsEqual(metric *dto.Metric, labels map[string]string) bool {
+	if len(metric.GetLabel()) != len(labels) {
+		return false
+	}
+	for _, label := range metric.GetLabel() {
+		if labels[label.GetName()] != label.GetValue() {
+			return false
+		}
+	}
+	return true
 }
 
 func originCert(t *testing.T) ([]byte, []byte) {

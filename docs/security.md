@@ -33,3 +33,7 @@ Listener-wrapper passthrough uses `listener_wrappers { bifrost { route_sni ... }
 ## Admin Exposure
 
 Keep Caddy's admin API and any private-side service listeners on loopback or protected networks. Do not expose private-side `forward` targets directly to the public internet unless that is intentional.
+
+## Metrics Labels
+
+Bifrost metrics exported through Caddy use endpoint keys and controlled reason/direction values only. Tokens, remote addresses, HTTP paths, and SNI names are not used as Bifrost metric labels.
