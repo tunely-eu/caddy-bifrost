@@ -76,16 +76,6 @@ func parseServerBody(d *caddyfilepkg.Dispenser, s *config.Server, nesting int) e
 			if err := parseConnectorBody(d, &s.Connector, d.Nesting()); err != nil {
 				return err
 			}
-		case "passthrough":
-			if d.NextArg() {
-				s.Passthrough.Listen = d.Val()
-			}
-			if d.NextArg() {
-				return d.ArgErr()
-			}
-			if err := parsePassthroughBody(d, &s.Passthrough, d.Nesting()); err != nil {
-				return err
-			}
 		case "guardrails":
 			if d.NextArg() {
 				return d.ArgErr()
@@ -191,22 +181,6 @@ func parseLimits(d *caddyfilepkg.Dispenser, limits *config.EndpointLimits, nesti
 				return err
 			}
 			limits.StreamIdleTimeout = value
-		default:
-			return d.ArgErr()
-		}
-	}
-	return nil
-}
-
-func parsePassthroughBody(d *caddyfilepkg.Dispenser, p *config.Passthrough, nesting int) error {
-	for d.NextBlock(nesting) {
-		switch d.Val() {
-		case "route_sni":
-			serverName, endpoint, err := twoArgs(d)
-			if err != nil {
-				return err
-			}
-			p.Routes = append(p.Routes, config.SNIRoute{ServerName: serverName, Endpoint: endpoint})
 		default:
 			return d.ArgErr()
 		}
@@ -399,21 +373,6 @@ func singleArg(d *caddyfilepkg.Dispenser) (string, error) {
 		return "", d.ArgErr()
 	}
 	return value, nil
-}
-
-func twoArgs(d *caddyfilepkg.Dispenser) (string, string, error) {
-	if !d.NextArg() {
-		return "", "", d.ArgErr()
-	}
-	first := d.Val()
-	if !d.NextArg() {
-		return "", "", d.ArgErr()
-	}
-	second := d.Val()
-	if d.NextArg() {
-		return "", "", d.ArgErr()
-	}
-	return first, second, nil
 }
 
 func singleInt(d *caddyfilepkg.Dispenser) (int, error) {

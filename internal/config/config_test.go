@@ -20,6 +20,29 @@ func TestServerValidateRequiresEndpointAndToken(t *testing.T) {
 	}
 }
 
+func TestServerValidateWithProviderAllowsMissingEndpoints(t *testing.T) {
+	server := &Server{
+		Connector: Connector{
+			TLSSubject: "public.example.com",
+		},
+	}
+	if err := server.ValidateWithProvider(true); err != nil {
+		t.Fatalf("ValidateWithProvider: %v", err)
+	}
+}
+
+func TestServerValidateWithProviderRejectsStaticEndpoints(t *testing.T) {
+	server := &Server{
+		Connector: Connector{
+			TLSSubject: "public.example.com",
+			Endpoints:  []Endpoint{{Key: "home", Token: "secret"}},
+		},
+	}
+	if err := server.ValidateWithProvider(true); err == nil {
+		t.Fatal("expected static endpoint conflict")
+	}
+}
+
 func TestServerStaticClientsMapLimitsAndPolicy(t *testing.T) {
 	server := &Server{
 		Connector: Connector{

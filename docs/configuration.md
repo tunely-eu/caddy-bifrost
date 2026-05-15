@@ -31,7 +31,7 @@ Fields:
 | --- | --- |
 | `connector <listen>` | Listener for private clients. Defaults to `:8443` when omitted. |
 | `tls <subject>` | Certificate subject managed by Caddy's TLS app for the connector listener. |
-| `endpoint <key>` | Stable Bifrost endpoint identity used by transports and SNI routes. |
+| `endpoint <key>` | Stable Bifrost endpoint identity used by transports and passthrough routes. |
 | `token <value>` | Shared secret accepted for the endpoint. |
 | `policy <mode>` | `reject_if_exists`, `replace_existing`, or `allow_parallel`. |
 | `max_parallel <n>` | Maximum active sessions for `allow_parallel`. |
@@ -120,14 +120,33 @@ reverse_proxy http://home {
 
 `endpoint` must match an endpoint key configured on the server runtime.
 
+## Dynamic Accept Providers
+
+Standalone Caddyfile config uses static `endpoint` blocks for tunnel admission. Embedded builds can provide a custom module implementing `bifrost.AcceptProvider` through the `bifrost.accept_providers` namespace, or use the runtime `WithAcceptProvider` option directly.
+
+When a custom accept provider is configured, static `endpoint` blocks must be omitted. The provider returns Bifrost's native accept decision; caddy-bifrost does not define a second decision model. Bifrost guardrails are still enforced after every decision.
+
 ## SNI Passthrough
 
 ```caddyfile
-passthrough :443 {
-	route_sni home.example.com home
-	route_sni files.example.com home
+{
+	servers :443 {
+		listener_wrappers {
+			bifrost {
+				route_sni home.example.com home
+			}
+			tls
+		}
+	}
+}
+
+:443 {
+	abort
 }
 ```
 
-Public Caddy reads ClientHello SNI only and forwards the raw TLS stream through Bifrost to the selected endpoint.
+`route_sni <server_name> <endpoint>` maps an exact ClientHello SNI name to a Bifrost endpoint. Matching SNI is forwarded as raw TLS through Bifrost; non-matching SNI continues into Caddy's normal TLS and HTTP pipeline.
 
+The listener wrapper must appear before Caddy's `tls` listener wrapper. Without the explicit `tls` marker, Caddy places custom listener wrappers after TLS, which is too late for raw TLS passthrough.
+
+Private TLS hostnames are not configured as Caddy HTTP site blocks, so Caddy does not include them in automatic HTTPS certificate management. If no public Caddy route exists on the wrapped listener, add a catch-all `:443 { abort }` block to make Caddy open the listener.

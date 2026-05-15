@@ -10,16 +10,14 @@ import (
 )
 
 const (
-	DefaultConnectorListen   = ":8443"
-	DefaultPassthroughListen = ":443"
-	DefaultAppName           = "bifrost"
+	DefaultConnectorListen = ":8443"
+	DefaultAppName         = "bifrost"
 )
 
 type Server struct {
-	Connector   Connector   `json:"connector,omitempty"`
-	Passthrough Passthrough `json:"passthrough,omitempty"`
-	Guardrails  Guardrails  `json:"guardrails,omitempty"`
-	Runtime     Runtime     `json:"runtime,omitempty"`
+	Connector  Connector  `json:"connector,omitempty"`
+	Guardrails Guardrails `json:"guardrails,omitempty"`
+	Runtime    Runtime    `json:"runtime,omitempty"`
 }
 
 type Connector struct {
@@ -40,16 +38,6 @@ type EndpointLimits struct {
 	MaxStreams        int            `json:"max_streams,omitempty"`
 	MaxBandwidthBPS   int64          `json:"max_bandwidth_bps,omitempty"`
 	StreamIdleTimeout caddy.Duration `json:"stream_idle_timeout,omitempty"`
-}
-
-type Passthrough struct {
-	Listen string     `json:"listen,omitempty"`
-	Routes []SNIRoute `json:"routes,omitempty"`
-}
-
-type SNIRoute struct {
-	ServerName string `json:"server_name,omitempty"`
-	Endpoint   string `json:"endpoint,omitempty"`
 }
 
 type Guardrails struct {
@@ -88,9 +76,6 @@ func (s *Server) Normalize() {
 	if s.Connector.Listen == "" {
 		s.Connector.Listen = DefaultConnectorListen
 	}
-	if s.Passthrough.Listen == "" && len(s.Passthrough.Routes) > 0 {
-		s.Passthrough.Listen = DefaultPassthroughListen
-	}
 	for i := range s.Connector.Endpoints {
 		s.Connector.Endpoints[i].Key = strings.TrimSpace(s.Connector.Endpoints[i].Key)
 		s.Connector.Endpoints[i].Token = strings.TrimSpace(s.Connector.Endpoints[i].Token)
@@ -99,6 +84,10 @@ func (s *Server) Normalize() {
 }
 
 func (s *Server) Validate() error {
+	return s.ValidateWithProvider(false)
+}
+
+func (s *Server) ValidateWithProvider(providerConfigured bool) error {
 	if s == nil {
 		return fmt.Errorf("server runtime is required")
 	}
@@ -110,7 +99,11 @@ func (s *Server) Validate() error {
 		return fmt.Errorf("server.connector.tls_subject is required")
 	}
 	if len(s.Connector.Endpoints) == 0 {
-		return fmt.Errorf("server.connector.endpoints is required")
+		if !providerConfigured {
+			return fmt.Errorf("server.connector.endpoints is required")
+		}
+	} else if providerConfigured {
+		return fmt.Errorf("server.connector.endpoints cannot be combined with custom accept provider")
 	}
 	seenEndpoints := make(map[string]struct{}, len(s.Connector.Endpoints))
 	for index, endpoint := range s.Connector.Endpoints {
@@ -128,18 +121,9 @@ func (s *Server) Validate() error {
 			return fmt.Errorf("server.connector.endpoints[%d].limits: %w", index, err)
 		}
 	}
-	if _, err := s.StaticClients(); err != nil {
-		return err
-	}
-	if s.Passthrough.Listen != "" && len(s.Passthrough.Routes) == 0 {
-		return fmt.Errorf("server.passthrough.routes is required when passthrough listen is configured")
-	}
-	if len(s.Passthrough.Routes) > 0 {
-		if strings.TrimSpace(s.Passthrough.Listen) == "" {
-			return fmt.Errorf("server.passthrough.listen is required")
-		}
-		if _, err := NewRouteTable(s.Passthrough.Routes); err != nil {
-			return fmt.Errorf("server.passthrough: %w", err)
+	if !providerConfigured {
+		if _, err := s.StaticClients(); err != nil {
+			return err
 		}
 	}
 	if err := s.Guardrails.Validate(); err != nil {

@@ -1,9 +1,11 @@
 package caddybifrost
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/tunely-eu/bifrost"
 	"go.uber.org/zap"
 
 	"github.com/tunely-eu/caddy-bifrost/internal/config"
@@ -11,11 +13,17 @@ import (
 )
 
 type App struct {
-	Server *config.Server `json:"server,omitempty"`
-	Client *config.Client `json:"client,omitempty"`
+	Server            *config.Server  `json:"server,omitempty"`
+	Client            *config.Client  `json:"client,omitempty"`
+	AcceptProviderRaw json.RawMessage `json:"accept_provider,omitempty" caddy:"namespace=bifrost.accept_providers inline_key=provider"`
 
 	logger  *zap.Logger
 	runtime appRuntime
+}
+
+type AcceptProviderModule interface {
+	caddy.Module
+	bifrost.AcceptProvider
 }
 
 type appRuntime interface {
@@ -36,9 +44,20 @@ func (a *App) Provision(ctx caddy.Context) error {
 	if err != nil {
 		return err
 	}
+	if runtimeName != "server" && len(a.AcceptProviderRaw) > 0 {
+		return fmt.Errorf("bifrost accept_provider requires server runtime")
+	}
 	switch runtimeName {
 	case "server":
-		server, err := runtime.NewServer(ctx, a.Server, a.logger.Named("server"))
+		acceptProvider, err := a.loadAcceptProvider(ctx)
+		if err != nil {
+			return err
+		}
+		var options []runtime.ServerOption
+		if acceptProvider != nil {
+			options = append(options, runtime.WithAcceptProvider(acceptProvider))
+		}
+		server, err := runtime.NewServer(ctx, a.Server, a.logger.Named("server"), options...)
 		if err != nil {
 			return err
 		}
@@ -54,6 +73,21 @@ func (a *App) Provision(ctx caddy.Context) error {
 	default:
 		return fmt.Errorf("unsupported bifrost runtime %q", runtimeName)
 	}
+}
+
+func (a *App) loadAcceptProvider(ctx caddy.Context) (bifrost.AcceptProvider, error) {
+	if len(a.AcceptProviderRaw) == 0 {
+		return nil, nil
+	}
+	mod, err := ctx.LoadModule(a, "AcceptProviderRaw")
+	if err != nil {
+		return nil, fmt.Errorf("loading bifrost accept provider: %w", err)
+	}
+	provider, ok := mod.(bifrost.AcceptProvider)
+	if !ok {
+		return nil, fmt.Errorf("bifrost accept provider module has unexpected type %T", mod)
+	}
+	return provider, nil
 }
 
 func (a *App) Start() error {

@@ -81,6 +81,16 @@ Public Caddy:
 
 ```caddyfile
 {
+	servers :443 {
+		listener_wrappers {
+			bifrost {
+				route_sni home.example.com home
+				route_sni files.example.com home
+			}
+			tls
+		}
+	}
+
 	bifrost {
 		server {
 			connector :8443 {
@@ -93,13 +103,12 @@ Public Caddy:
 					}
 				}
 			}
-
-			passthrough :443 {
-				route_sni home.example.com home
-				route_sni files.example.com home
-			}
 		}
 	}
+}
+
+:443 {
+	abort
 }
 ```
 
@@ -123,7 +132,7 @@ home.example.com {
 }
 ```
 
-When `passthrough :443` owns port 443 on the public host, use DNS-01 or HTTP-01 on port 80 for the connector certificate. TLS-ALPN-01 on port 443 would collide with the passthrough listener.
+Listener-wrapper passthrough lets Caddy continue serving normal public-TLS routes on the same `:443` listener without creating HTTP routes or edge certificates for private TLS hostnames. The catch-all `:443 { abort }` block only keeps the listener alive when there are no public Caddy routes on that listener.
 
 ## Configuration
 

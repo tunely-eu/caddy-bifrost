@@ -1,0 +1,177 @@
+package caddybifrost
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"strings"
+
+	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"go.uber.org/zap"
+
+	"github.com/tunely-eu/caddy-bifrost/internal/config"
+	"github.com/tunely-eu/caddy-bifrost/internal/netutil"
+	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
+)
+
+type ListenerWrapper struct {
+	App    string            `json:"app,omitempty"`
+	Routes []config.SNIRoute `json:"routes,omitempty"`
+
+	ctx        context.Context
+	logger     *zap.Logger
+	bifrostApp *App
+}
+
+func (*ListenerWrapper) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "caddy.listeners.bifrost",
+		New: func() caddy.Module { return new(ListenerWrapper) },
+	}
+}
+
+func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
+	if strings.TrimSpace(w.App) == "" {
+		w.App = config.DefaultAppName
+	}
+	w.ctx = ctx.Context
+	w.logger = ctx.Logger(w)
+
+	app, err := ctx.App(w.App)
+	if err != nil {
+		return fmt.Errorf("getting %s app: %w", w.App, err)
+	}
+	bifrostApp, ok := app.(*App)
+	if !ok {
+		return fmt.Errorf("%s app has unexpected type %T", w.App, app)
+	}
+	w.bifrostApp = bifrostApp
+
+	if len(w.Routes) > 0 {
+		resolver, err := runtime.NewStaticPassthroughResolver(w.Routes)
+		if err != nil {
+			return fmt.Errorf("bifrost listener passthrough routes: %w", err)
+		}
+		server, err := w.serverRuntime()
+		if err != nil {
+			return err
+		}
+		server.SetPassthroughResolver(resolver)
+		w.logger.Info("installed bifrost passthrough routes", zap.Int("routes", len(w.Routes)))
+	}
+	return nil
+}
+
+func (w *ListenerWrapper) WrapListener(listener net.Listener) net.Listener {
+	return &bifrostListener{Listener: listener, wrapper: w}
+}
+
+func (w *ListenerWrapper) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	d.Next()
+	if d.NextArg() {
+		return d.ArgErr()
+	}
+	for d.NextBlock(0) {
+		switch d.Val() {
+		case "app":
+			if !d.NextArg() {
+				return d.ArgErr()
+			}
+			w.App = d.Val()
+			if d.NextArg() {
+				return d.ArgErr()
+			}
+		case "route_sni":
+			if !d.NextArg() {
+				return d.ArgErr()
+			}
+			serverName := d.Val()
+			if !d.NextArg() {
+				return d.ArgErr()
+			}
+			endpoint := d.Val()
+			if d.NextArg() {
+				return d.ArgErr()
+			}
+			w.Routes = append(w.Routes, config.SNIRoute{ServerName: serverName, Endpoint: endpoint})
+		default:
+			return d.ArgErr()
+		}
+	}
+	return nil
+}
+
+func (w *ListenerWrapper) serverRuntime() (*runtime.Server, error) {
+	if w == nil || w.bifrostApp == nil {
+		return nil, fmt.Errorf("bifrost listener wrapper is not provisioned")
+	}
+	server, ok := w.bifrostApp.runtime.(*runtime.Server)
+	if !ok {
+		return nil, fmt.Errorf("%s app must be configured with server runtime", w.App)
+	}
+	return server, nil
+}
+
+type bifrostListener struct {
+	net.Listener
+	wrapper *ListenerWrapper
+}
+
+func (l *bifrostListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		replayConn, handled := l.wrapper.handleConnection(conn)
+		if handled {
+			continue
+		}
+		return replayConn, nil
+	}
+}
+
+func (w *ListenerWrapper) handleConnection(conn net.Conn) (net.Conn, bool) {
+	serverName, replayConn, err := netutil.PeekClientHelloServerName(conn)
+	if replayConn == nil {
+		replayConn = conn
+	}
+	if err != nil {
+		w.logger.Debug("bifrost passthrough client hello peek failed", zap.Error(err))
+		return replayConn, false
+	}
+
+	server, err := w.serverRuntime()
+	if err != nil {
+		w.logger.Warn("bifrost passthrough server unavailable", zap.Error(err))
+		_ = replayConn.Close()
+		return nil, true
+	}
+	ctx := w.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	endpoint, ok, err := server.ResolvePassthrough(ctx, serverName)
+	if err != nil {
+		w.logger.Warn("bifrost passthrough route resolution failed", zap.String("server_name", serverName), zap.Error(err))
+		_ = replayConn.Close()
+		return nil, true
+	}
+	if !ok {
+		return replayConn, false
+	}
+
+	go func() {
+		if err := server.ProxyStream(ctx, endpoint, replayConn); err != nil {
+			w.logger.Warn("bifrost passthrough proxy failed", zap.String("server_name", serverName), zap.String("endpoint", endpoint), zap.Error(err))
+		}
+	}()
+	return nil, true
+}
+
+var (
+	_ caddy.Provisioner     = (*ListenerWrapper)(nil)
+	_ caddy.ListenerWrapper = (*ListenerWrapper)(nil)
+	_ caddyfile.Unmarshaler = (*ListenerWrapper)(nil)
+)

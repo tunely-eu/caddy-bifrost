@@ -1,4 +1,14 @@
 {
+	servers :443 {
+		listener_wrappers {
+			bifrost {
+				route_sni home.example.com home
+				route_sni files.example.com home
+			}
+			tls
+		}
+	}
+
 	bifrost {
 		server {
 			connector :8443 {
@@ -11,11 +21,10 @@
 					}
 				}
 			}
-
-			passthrough :443 {
-				route_sni home.example.com home
-				route_sni files.example.com home
-			}
 		}
 	}
+}
+
+:443 {
+	abort
 }

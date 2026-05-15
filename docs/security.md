@@ -29,9 +29,8 @@ In Public TLS mode, public Caddy terminates browser HTTPS and then proxies over 
 
 In Private TLS mode, public Caddy only reads ClientHello SNI and forwards the raw TLS stream. The application TLS session terminates on the private Caddy instance.
 
-If `passthrough :443` owns port 443, avoid TLS-ALPN-01 for the connector certificate on the same port. Use DNS-01 or HTTP-01 on port 80 instead.
+Listener-wrapper passthrough uses `listener_wrappers { bifrost { route_sni ... } tls }` so normal public-TLS routes can share the same `:443` listener. Private TLS hostnames are not configured as Caddy HTTP routes, so Caddy does not request edge certificates for them.
 
 ## Admin Exposure
 
 Keep Caddy's admin API and any private-side service listeners on loopback or protected networks. Do not expose private-side `forward` targets directly to the public internet unless that is intentional.
-

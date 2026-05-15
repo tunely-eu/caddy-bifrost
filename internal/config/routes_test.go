@@ -25,3 +25,10 @@ func TestRouteTableRejectsDuplicates(t *testing.T) {
 		t.Fatal("expected duplicate route error")
 	}
 }
+
+func TestRouteTableRejectsWildcardServerNames(t *testing.T) {
+	_, err := NewRouteTable([]SNIRoute{{ServerName: "*.example.com", Endpoint: "home"}})
+	if err == nil {
+		t.Fatal("expected wildcard route error")
+	}
+}

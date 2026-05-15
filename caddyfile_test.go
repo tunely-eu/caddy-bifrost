@@ -45,10 +45,6 @@ func TestAppUnmarshalCaddyfileServer(t *testing.T) {
 			tunnel_keepalive_interval 30s
 			tunnel_keepalive_timeout 10s
 		}
-		passthrough :443 {
-			route_sni home.example.com home
-			route_sni files.example.com home
-		}
 	}
 }`)
 	var app App
@@ -86,9 +82,6 @@ func TestAppUnmarshalCaddyfileServer(t *testing.T) {
 	}
 	if server.Runtime.StreamCopyBufferBytes != 32768 || time.Duration(server.Runtime.HandshakeTimeout) != 10*time.Second {
 		t.Fatalf("runtime = %#v", server.Runtime)
-	}
-	if server.Passthrough.Listen != ":443" || len(server.Passthrough.Routes) != 2 {
-		t.Fatalf("passthrough = %#v", server.Passthrough)
 	}
 }
 
@@ -146,8 +139,47 @@ func TestTransportUnmarshalCaddyfile(t *testing.T) {
 	}
 }
 
+func TestTransportUnmarshalCaddyfileRejectsPassthrough(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`bifrost {
+	endpoint home
+	passthrough enable
+}`)
+	var transport Transport
+	if err := transport.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected passthrough transport option to be rejected")
+	}
+}
+
+func TestAppUnmarshalCaddyfileRejectsLegacyPassthrough(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`bifrost {
+	server {
+		connector :8443 {
+			tls public.example.com
+			endpoint home {
+				token secret
+			}
+		}
+		passthrough :443 {
+			route_sni home.example.com home
+		}
+	}
+}`)
+	var app App
+	if err := app.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected legacy app passthrough option to be rejected")
+	}
+}
+
 func TestCaddyfileAdaptServerAppAndTransport(t *testing.T) {
 	configJSON := adaptCaddyfile(t, `{
+	servers :443 {
+		listener_wrappers {
+			bifrost {
+				route_sni home.example.com home
+			}
+			tls
+		}
+	}
 	bifrost {
 		server {
 			connector :8443 {
@@ -162,14 +194,11 @@ func TestCaddyfileAdaptServerAppAndTransport(t *testing.T) {
 					}
 				}
 			}
-			passthrough :443 {
-				route_sni home.example.com home
-			}
 		}
 	}
 }
 
-home.example.com {
+media.example.com {
 	reverse_proxy http://home {
 		transport bifrost {
 			endpoint home
@@ -193,6 +222,13 @@ home.example.com {
 	}
 	if !bytes.Contains(configJSON, []byte(`"protocol":"bifrost"`)) {
 		t.Fatalf("adapted config does not include bifrost transport: %s", configJSON)
+	}
+	if !bytes.Contains(configJSON, []byte(`"server_name":"home.example.com"`)) ||
+		!bytes.Contains(configJSON, []byte(`"endpoint":"home"`)) {
+		t.Fatalf("adapted config does not include bifrost listener routes: %s", configJSON)
+	}
+	if !bytes.Contains(configJSON, []byte(`"wrapper":"bifrost"`)) || !bytes.Contains(configJSON, []byte(`"wrapper":"tls"`)) {
+		t.Fatalf("adapted config does not include listener wrappers: %s", configJSON)
 	}
 }
 

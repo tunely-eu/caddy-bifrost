@@ -37,6 +37,7 @@ docker-build:
 
 verify-module:
 	./caddy list-modules | grep -E '^bifrost[[:space:]]*$$'
+	./caddy list-modules | grep -E '^caddy\.listeners\.bifrost[[:space:]]*$$'
 	./caddy list-modules | grep -E '^http\.reverse_proxy\.transport\.bifrost[[:space:]]*$$'
 
 clean:

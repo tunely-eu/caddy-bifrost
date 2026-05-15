@@ -20,14 +20,14 @@ import (
 )
 
 type Server struct {
-	cfg           *config.Server
-	logger        *zap.Logger
-	tlsConfig     *tls.Config
-	staticClients []bifrost.StaticClient
-	routes        config.RouteTable
+	cfg        *config.Server
+	logger     *zap.Logger
+	tlsConfig  *tls.Config
+	accept     bifrost.AcceptProvider
+	resolverMu sync.RWMutex
+	resolver   PassthroughResolver
 
 	server    *bifrost.Server
-	listener  net.Listener
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
@@ -35,7 +35,43 @@ type Server struct {
 	startedAt time.Time
 }
 
-func NewServer(ctx caddy.Context, cfg *config.Server, logger *zap.Logger) (*Server, error) {
+type PassthroughResolver interface {
+	ResolvePassthrough(ctx context.Context, serverName string) (endpoint string, ok bool, err error)
+}
+
+type ServerOptions struct {
+	AcceptProvider bifrost.AcceptProvider
+}
+
+type ServerOption func(*ServerOptions)
+
+func WithAcceptProvider(provider bifrost.AcceptProvider) ServerOption {
+	return func(opts *ServerOptions) {
+		opts.AcceptProvider = provider
+	}
+}
+
+type StaticPassthroughResolver struct {
+	routes config.RouteTable
+}
+
+func NewStaticPassthroughResolver(routes []config.SNIRoute) (*StaticPassthroughResolver, error) {
+	table, err := config.NewRouteTable(routes)
+	if err != nil {
+		return nil, err
+	}
+	return &StaticPassthroughResolver{routes: table}, nil
+}
+
+func (r *StaticPassthroughResolver) ResolvePassthrough(_ context.Context, serverName string) (string, bool, error) {
+	if r == nil {
+		return "", false, nil
+	}
+	endpoint, ok := r.routes.Resolve(serverName)
+	return endpoint, ok, nil
+}
+
+func NewServer(ctx caddy.Context, cfg *config.Server, logger *zap.Logger, options ...ServerOption) (*Server, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -46,37 +82,47 @@ func NewServer(ctx caddy.Context, cfg *config.Server, logger *zap.Logger) (*Serv
 	if err != nil {
 		return nil, err
 	}
-	return NewServerWithTLSConfig(cfg, tlsConfig, logger)
+	return NewServerWithTLSConfig(cfg, tlsConfig, logger, options...)
 }
 
-func NewServerWithTLSConfig(cfg *config.Server, tlsConfig *tls.Config, logger *zap.Logger) (*Server, error) {
+func NewServerWithTLSConfig(cfg *config.Server, tlsConfig *tls.Config, logger *zap.Logger, options ...ServerOption) (*Server, error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	if tlsConfig == nil {
 		return nil, fmt.Errorf("connector tls config is required")
 	}
-	if err := cfg.Validate(); err != nil {
+	opts := applyServerOptions(options)
+	if err := cfg.ValidateWithProvider(opts.AcceptProvider != nil); err != nil {
 		return nil, err
 	}
-	clients, err := cfg.StaticClients()
-	if err != nil {
-		return nil, err
-	}
-	var routes config.RouteTable
-	if len(cfg.Passthrough.Routes) > 0 {
-		routes, err = config.NewRouteTable(cfg.Passthrough.Routes)
+	acceptProvider := opts.AcceptProvider
+	if acceptProvider == nil {
+		clients, err := cfg.StaticClients()
+		if err != nil {
+			return nil, err
+		}
+		acceptProvider, err = bifrost.NewStaticAcceptProvider(clients)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return &Server{
-		cfg:           cfg,
-		logger:        logger,
-		tlsConfig:     tlsConfig,
-		staticClients: clients,
-		routes:        routes,
+		cfg:       cfg,
+		logger:    logger,
+		tlsConfig: tlsConfig,
+		accept:    acceptProvider,
 	}, nil
+}
+
+func applyServerOptions(options []ServerOption) ServerOptions {
+	var opts ServerOptions
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
+	return opts
 }
 
 func caddyTLSConfig(ctx caddy.Context, subject string) (*tls.Config, error) {
@@ -137,12 +183,12 @@ func (s *Server) Start() error {
 	server, err := bifrost.NewServer(bifrost.ServerConfig{
 		Listen:     s.cfg.Connector.Listen,
 		TLSConfig:  s.tlsConfig,
-		Clients:    s.staticClients,
 		Guardrails: s.cfg.Guardrails.BifrostGuardrails(),
 		Runtime:    s.cfg.Runtime.BifrostRuntime(),
 	}, bifrost.ServerOptions{
-		Listener: connectorListener,
-		Logger:   logging.Slog(s.logger.Named("bifrost")),
+		AcceptProvider: s.accept,
+		Listener:       connectorListener,
+		Logger:         logging.Slog(s.logger.Named("bifrost")),
 		Ready: func(addr net.Addr) {
 			select {
 			case ready <- addr:
@@ -159,9 +205,6 @@ func (s *Server) Start() error {
 
 	failStart := func(err error) error {
 		cancel()
-		if s.listener != nil {
-			_ = s.listener.Close()
-		}
 		s.wg.Wait()
 		return err
 	}
@@ -186,16 +229,6 @@ func (s *Server) Start() error {
 		return failStart(fmt.Errorf("bifrost connector listener did not become ready"))
 	}
 
-	if s.cfg.Passthrough.Listen != "" {
-		listener, err := netutil.ListenCaddy(ctx, s.cfg.Passthrough.Listen)
-		if err != nil {
-			return failStart(err)
-		}
-		s.listener = listener
-
-		s.wg.Add(1)
-		go s.acceptPassthrough()
-	}
 	s.startedAt = time.Now()
 	return nil
 }
@@ -207,9 +240,6 @@ func (s *Server) Stop() error {
 	s.stopOnce.Do(func() {
 		if s.cancel != nil {
 			s.cancel()
-		}
-		if s.listener != nil {
-			_ = s.listener.Close()
 		}
 		s.wg.Wait()
 	})
@@ -223,42 +253,32 @@ func (s *Server) OpenStream(ctx context.Context, endpoint string) (net.Conn, err
 	return s.server.OpenStream(ctx, endpoint)
 }
 
-func (s *Server) acceptPassthrough() {
-	defer s.wg.Done()
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			if s.ctx != nil && s.ctx.Err() != nil {
-				return
-			}
-			s.logger.Warn("accept passthrough failed", zap.Error(err))
-			return
-		}
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
-			s.handlePassthrough(conn)
-		}()
+func (s *Server) ProxyStream(ctx context.Context, endpoint string, conn net.Conn) error {
+	if s == nil || s.server == nil {
+		_ = conn.Close()
+		return fmt.Errorf("bifrost server is not running")
 	}
+	return s.server.ProxyStream(ctx, endpoint, conn)
 }
 
-func (s *Server) handlePassthrough(conn net.Conn) {
-	done := netutil.CloseOnContext(s.ctx, conn)
-	defer done()
+func (s *Server) SetPassthroughResolver(resolver PassthroughResolver) {
+	if s == nil {
+		return
+	}
+	s.resolverMu.Lock()
+	defer s.resolverMu.Unlock()
+	s.resolver = resolver
+}
 
-	serverName, replayConn, err := netutil.PeekClientHelloServerName(conn)
-	if err != nil {
-		s.logger.Warn("read client hello failed", zap.Error(err))
-		_ = conn.Close()
-		return
+func (s *Server) ResolvePassthrough(ctx context.Context, serverName string) (string, bool, error) {
+	if s == nil {
+		return "", false, fmt.Errorf("bifrost server runtime is not configured")
 	}
-	endpoint, ok := s.routes.Resolve(serverName)
-	if !ok {
-		s.logger.Warn("no bifrost route for sni", zap.String("server_name", serverName))
-		_ = replayConn.Close()
-		return
+	s.resolverMu.RLock()
+	resolver := s.resolver
+	s.resolverMu.RUnlock()
+	if resolver == nil {
+		return "", false, nil
 	}
-	if err := s.server.ProxyStream(s.ctx, endpoint, replayConn); err != nil {
-		s.logger.Warn("proxy bifrost stream failed", zap.String("endpoint", endpoint), zap.Error(err))
-	}
+	return resolver.ResolvePassthrough(ctx, serverName)
 }

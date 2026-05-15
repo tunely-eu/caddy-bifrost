@@ -9,6 +9,11 @@ type RouteTable struct {
 	byServerName map[string]string
 }
 
+type SNIRoute struct {
+	ServerName string `json:"server_name,omitempty"`
+	Endpoint   string `json:"endpoint,omitempty"`
+}
+
 func NewRouteTable(routes []SNIRoute) (RouteTable, error) {
 	table := RouteTable{byServerName: make(map[string]string, len(routes))}
 	for index, route := range routes {
@@ -16,6 +21,9 @@ func NewRouteTable(routes []SNIRoute) (RouteTable, error) {
 		endpoint := strings.TrimSpace(route.Endpoint)
 		if serverName == "" {
 			return RouteTable{}, fmt.Errorf("routes[%d].server_name is required", index)
+		}
+		if strings.ContainsAny(serverName, "*{}") {
+			return RouteTable{}, fmt.Errorf("routes[%d].server_name must be an exact SNI name", index)
 		}
 		if endpoint == "" {
 			return RouteTable{}, fmt.Errorf("routes[%d].endpoint is required", index)

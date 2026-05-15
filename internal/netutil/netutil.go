@@ -31,14 +31,15 @@ func PeekClientHelloServerName(conn net.Conn) (string, net.Conn, error) {
 			return nil, errClientHelloParsed
 		},
 	}).Handshake()
-	if err != nil && !errors.Is(err, errClientHelloParsed) {
-		return "", nil, err
-	}
-
-	return serverName, &prefixConn{
+	replayConn := &prefixConn{
 		Conn: conn,
 		r:    io.MultiReader(bytes.NewReader(replay.Bytes()), conn),
-	}, nil
+	}
+	if err != nil && !errors.Is(err, errClientHelloParsed) {
+		return "", replayConn, err
+	}
+
+	return serverName, replayConn, nil
 }
 
 type readWriteConn struct {
