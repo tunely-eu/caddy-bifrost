@@ -43,22 +43,17 @@ func TestListenerWrapperRoutesDoNotCreateHTTPHostRoute(t *testing.T) {
 		}
 	}
 	bifrost {
-		server {
-			connector :8443 {
-				tls public.example.com
-				endpoint home {
-					token secret
-				}
+		server public.example.com {
+			endpoint home {
+				token secret
 			}
 		}
 	}
 }
 
 media.example.com {
-	reverse_proxy http://media {
-		transport bifrost {
-			endpoint home
-		}
+	reverse_proxy home {
+		transport bifrost
 	}
 }`)
 

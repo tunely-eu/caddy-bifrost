@@ -1,10 +1,8 @@
 {
 	bifrost {
-		client {
-			connect public.example.com:8443
+		client public.example.com {
 			token {$HOME_TOKEN}
 			forward 127.0.0.1:8080
-			tls_server_name public.example.com
 		}
 	}
 }

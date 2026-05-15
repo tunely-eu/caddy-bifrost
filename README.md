@@ -13,15 +13,12 @@ Public Caddy:
 ```caddyfile
 {
 	bifrost {
-		server {
-			connector :8443 {
-				tls public.example.com
-				endpoint home {
-					token {$HOME_TOKEN}
-					policy replace_existing
-					limits {
-						max_streams 100
-					}
+		server public.example.com {
+			endpoint home {
+				token {$HOME_TOKEN}
+				policy replace_existing
+				limits {
+					max_streams 100
 				}
 			}
 		}
@@ -29,10 +26,8 @@ Public Caddy:
 }
 
 home.example.com {
-	reverse_proxy http://home {
-		transport bifrost {
-			endpoint home
-		}
+	reverse_proxy home {
+		transport bifrost
 	}
 }
 ```
@@ -42,11 +37,9 @@ Private Caddy:
 ```caddyfile
 {
 	bifrost {
-		client {
-			connect public.example.com:8443
+		client public.example.com {
 			token {$HOME_TOKEN}
 			forward 127.0.0.1:8080
-			tls_server_name public.example.com
 		}
 	}
 }
@@ -56,7 +49,7 @@ Private Caddy:
 }
 ```
 
-Open TCP `8443` on the public host for the Bifrost connector. The private host only needs outbound access to `public.example.com:8443`.
+Open TCP `8443` on the public host for the Bifrost connector. The private host only needs outbound access to `public.example.com:8443`. The `client` address defaults to port `8443` when no port is specified.
 
 ## Install
 
@@ -64,13 +57,13 @@ Build Caddy with `xcaddy`:
 
 ```sh
 xcaddy build v2.11.3 \
-  --with github.com/tunely-eu/caddy-bifrost@v0.3.0
+  --with github.com/tunely-eu/caddy-bifrost@v0.5.0
 ```
 
 Or use the prebuilt image:
 
 ```sh
-docker pull ghcr.io/tunely-eu/caddy-bifrost:0.3.0
+docker pull ghcr.io/tunely-eu/caddy-bifrost:0.5.0
 ```
 
 ## Private TLS / SNI Passthrough
@@ -92,15 +85,12 @@ Public Caddy:
 	}
 
 	bifrost {
-		server {
-			connector :8443 {
-				tls public.example.com
-				endpoint home {
-					token {$HOME_TOKEN}
-					policy replace_existing
-					limits {
-						max_streams 100
-					}
+		server public.example.com {
+			endpoint home {
+				token {$HOME_TOKEN}
+				policy replace_existing
+				limits {
+					max_streams 100
 				}
 			}
 		}
@@ -117,11 +107,9 @@ Private Caddy:
 ```caddyfile
 {
 	bifrost {
-		client {
-			connect public.example.com:8443
+		client public.example.com {
 			token {$HOME_TOKEN}
 			forward 127.0.0.1:9443
-			tls_server_name public.example.com
 		}
 	}
 }
@@ -136,16 +124,19 @@ Listener-wrapper passthrough lets Caddy continue serving normal public-TLS route
 
 ## Configuration
 
-Server endpoints are admitted by token and identified by endpoint key:
+Server endpoints are admitted by token and identified by endpoint key. Use `listen` only when the connector should not listen on the default `:8443` address:
 
 ```caddyfile
-endpoint home {
-	token {$HOME_TOKEN}
-	policy replace_existing
-	limits {
-		max_streams 100
-		max_bandwidth_bps 25000000
-		stream_idle_timeout 5m
+server public.example.com {
+	listen :8443
+	endpoint home {
+		token {$HOME_TOKEN}
+		policy replace_existing
+		limits {
+			max_streams 100
+			max_bandwidth_bps 25000000
+			stream_idle_timeout 5m
+		}
 	}
 }
 ```
@@ -174,6 +165,32 @@ runtime {
 	stream_copy_buffer_bytes 32768
 	tunnel_keepalive_interval 30s
 	tunnel_keepalive_timeout 10s
+}
+```
+
+For self-signed or private-CA connector certificates, configure Caddy's TLS app normally on the public server, then trust that CA from the private client:
+
+```caddyfile
+{
+	local_certs
+
+	bifrost {
+		server bifrost-server {
+			endpoint home {
+				token {$HOME_TOKEN}
+			}
+		}
+	}
+}
+```
+
+```caddyfile
+client bifrost-server {
+	token {$HOME_TOKEN}
+	forward 127.0.0.1:8080
+	tls {
+		ca_file /data/caddy/pki/authorities/local/root.crt
+	}
 }
 ```
 
@@ -214,8 +231,7 @@ See [Configuration](docs/configuration.md) and [Security](docs/security.md) for 
 {
   "handler": "reverse_proxy",
   "transport": {
-    "protocol": "bifrost",
-    "endpoint": "home"
+    "protocol": "bifrost"
   },
   "upstreams": [
     {"dial": "home"}

@@ -16,18 +16,16 @@ import (
 
 func TestAppUnmarshalCaddyfileServer(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
-	server {
-		connector :8443 {
-			tls public.example.com
-			endpoint home {
-				token secret
-				policy allow_parallel
-				max_parallel 2
-				limits {
-					max_streams 100
-					max_bandwidth_bps 25000000
-					stream_idle_timeout 5m
-				}
+	server public.example.com {
+		listen :8443
+		endpoint home {
+			token secret
+			policy allow_parallel
+			max_parallel 2
+			limits {
+				max_streams 100
+				max_bandwidth_bps 25000000
+				stream_idle_timeout 5m
 			}
 		}
 		guardrails {
@@ -85,15 +83,33 @@ func TestAppUnmarshalCaddyfileServer(t *testing.T) {
 	}
 }
 
+func TestAppUnmarshalCaddyfileServerDefaultsListen(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`bifrost {
+	server public.example.com {
+		endpoint home {
+			token secret
+		}
+	}
+}`)
+	var app App
+	if err := app.UnmarshalCaddyfile(d); err != nil {
+		t.Fatalf("UnmarshalCaddyfile: %v", err)
+	}
+	if app.Server.Connector.Listen != ":8443" {
+		t.Fatalf("connector listen = %q", app.Server.Connector.Listen)
+	}
+}
+
 func TestAppUnmarshalCaddyfileClient(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
-	client {
-		connect public.example.com:8443
+	client public.example.com {
 		token secret
 		forward 127.0.0.1:8080
-		tls_ca_file /certs/ca.crt
-		tls_server_name public.example.com
-		tls_insecure_skip_verify
+		tls {
+			ca_file /certs/ca.crt
+			server_name public.example.com
+			insecure_skip_verify
+		}
 	}
 }`)
 	var app App
@@ -121,9 +137,24 @@ func TestAppUnmarshalCaddyfileClient(t *testing.T) {
 	}
 }
 
+func TestAppUnmarshalCaddyfileClientKeepsExplicitPort(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`bifrost {
+	client public.example.com:9443 {
+		token secret
+		forward 127.0.0.1:8080
+	}
+}`)
+	var app App
+	if err := app.UnmarshalCaddyfile(d); err != nil {
+		t.Fatalf("UnmarshalCaddyfile: %v", err)
+	}
+	if app.Client.Connect != "public.example.com:9443" {
+		t.Fatalf("connect = %q", app.Client.Connect)
+	}
+}
+
 func TestTransportUnmarshalCaddyfile(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
-	endpoint home
 	app bifrost
 	dial_timeout 2s
 }`)
@@ -131,7 +162,7 @@ func TestTransportUnmarshalCaddyfile(t *testing.T) {
 	if err := transport.UnmarshalCaddyfile(d); err != nil {
 		t.Fatalf("UnmarshalCaddyfile: %v", err)
 	}
-	if transport.Endpoint != "home" || transport.App != "bifrost" {
+	if transport.App != "bifrost" {
 		t.Fatalf("transport = %#v", transport)
 	}
 	if time.Duration(transport.DialTimeout) != 2*time.Second {
@@ -139,9 +170,18 @@ func TestTransportUnmarshalCaddyfile(t *testing.T) {
 	}
 }
 
-func TestTransportUnmarshalCaddyfileRejectsPassthrough(t *testing.T) {
+func TestTransportUnmarshalCaddyfileRejectsEndpoint(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
 	endpoint home
+}`)
+	var transport Transport
+	if err := transport.UnmarshalCaddyfile(d); err == nil {
+		t.Fatal("expected endpoint transport option to be rejected")
+	}
+}
+
+func TestTransportUnmarshalCaddyfileRejectsPassthrough(t *testing.T) {
+	d := caddyfile.NewTestDispenser(`bifrost {
 	passthrough enable
 }`)
 	var transport Transport
@@ -152,12 +192,9 @@ func TestTransportUnmarshalCaddyfileRejectsPassthrough(t *testing.T) {
 
 func TestAppUnmarshalCaddyfileRejectsLegacyPassthrough(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
-	server {
-		connector :8443 {
-			tls public.example.com
-			endpoint home {
-				token secret
-			}
+	server public.example.com {
+		endpoint home {
+			token secret
 		}
 		passthrough :443 {
 			route_sni home.example.com home
@@ -181,17 +218,14 @@ func TestCaddyfileAdaptServerAppAndTransport(t *testing.T) {
 		}
 	}
 	bifrost {
-		server {
-			connector :8443 {
-				tls public.example.com
-				endpoint home {
-					token secret
-					policy replace_existing
-					limits {
-						max_streams 100
-						max_bandwidth_bps 25000000
-						stream_idle_timeout 5m
-					}
+		server public.example.com {
+			endpoint home {
+				token secret
+				policy replace_existing
+				limits {
+					max_streams 100
+					max_bandwidth_bps 25000000
+					stream_idle_timeout 5m
 				}
 			}
 		}
@@ -199,10 +233,8 @@ func TestCaddyfileAdaptServerAppAndTransport(t *testing.T) {
 }
 
 media.example.com {
-	reverse_proxy http://home {
-		transport bifrost {
-			endpoint home
-		}
+	reverse_proxy home {
+		transport bifrost
 	}
 }`)
 	assertBifrostConfig(t, configJSON)
@@ -223,6 +255,9 @@ media.example.com {
 	if !bytes.Contains(configJSON, []byte(`"protocol":"bifrost"`)) {
 		t.Fatalf("adapted config does not include bifrost transport: %s", configJSON)
 	}
+	if bytes.Contains(configJSON, []byte(`"transport":{"protocol":"bifrost","endpoint"`)) {
+		t.Fatalf("adapted config includes removed transport endpoint: %s", configJSON)
+	}
 	if !bytes.Contains(configJSON, []byte(`"server_name":"home.example.com"`)) ||
 		!bytes.Contains(configJSON, []byte(`"endpoint":"home"`)) {
 		t.Fatalf("adapted config does not include bifrost listener routes: %s", configJSON)
@@ -235,8 +270,7 @@ media.example.com {
 func TestCaddyfileAdaptClientApp(t *testing.T) {
 	configJSON := adaptCaddyfile(t, `{
 	bifrost {
-		client {
-			connect public.example.com:8443
+		client public.example.com {
 			token secret
 			forward 127.0.0.1:8080
 		}
@@ -257,13 +291,17 @@ func TestCaddyfileAdaptClientApp(t *testing.T) {
 	if cfg.Apps.Bifrost.Client.Token != "secret" {
 		t.Fatalf("client = %#v", cfg.Apps.Bifrost.Client)
 	}
+	if cfg.Apps.Bifrost.Client.Connect != "public.example.com:8443" {
+		t.Fatalf("client connect = %#v", cfg.Apps.Bifrost.Client)
+	}
 }
 
 func TestRemovedDirectivesAreRejected(t *testing.T) {
 	for _, input := range []string{
-		`bifrost { server { connectors :8443 {} } }`,
-		`bifrost { server { connector :8443 { client home { token secret } } } }`,
-		`bifrost { client { endpoint home } }`,
+		`bifrost { server public.example.com { connectors :8443 {} } }`,
+		`bifrost { server public.example.com { connector :8443 { endpoint home { token secret } } } }`,
+		`bifrost { client public.example.com { connect other.example.com:8443 } }`,
+		`bifrost { client public.example.com { tls_ca_file /certs/ca.crt } }`,
 	} {
 		d := caddyfile.NewTestDispenser(input)
 		var app App
@@ -275,8 +313,8 @@ func TestRemovedDirectivesAreRejected(t *testing.T) {
 
 func TestAppRejectsMultipleRuntimes(t *testing.T) {
 	d := caddyfile.NewTestDispenser(`bifrost {
-	server {}
-client {}
+server localhost {}
+client public.example.com {}
 }`)
 	var app App
 	if err := app.UnmarshalCaddyfile(d); err == nil {

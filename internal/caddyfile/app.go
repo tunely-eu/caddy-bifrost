@@ -24,25 +24,37 @@ func ParseApp(d *caddyfilepkg.Dispenser) (*config.Server, *config.Client, error)
 				if server != nil || client != nil {
 					return nil, nil, d.Errf("configure exactly one bifrost runtime: server or client")
 				}
+				if !d.NextArg() {
+					return nil, nil, d.ArgErr()
+				}
+				tlsSubject := d.Val()
 				if d.NextArg() {
 					return nil, nil, d.ArgErr()
 				}
 				cfg := new(config.Server)
+				cfg.Connector.TLSSubject = tlsSubject
 				if err := parseServerBody(d, cfg, d.Nesting()); err != nil {
 					return nil, nil, err
 				}
+				cfg.Normalize()
 				server = cfg
 			case "client":
 				if server != nil || client != nil {
 					return nil, nil, d.Errf("configure exactly one bifrost runtime: server or client")
 				}
+				if !d.NextArg() {
+					return nil, nil, d.ArgErr()
+				}
+				connect := d.Val()
 				if d.NextArg() {
 					return nil, nil, d.ArgErr()
 				}
 				cfg := new(config.Client)
+				cfg.Connect = connect
 				if err := parseClientBody(d, cfg, d.Nesting()); err != nil {
 					return nil, nil, err
 				}
+				cfg.Normalize()
 				client = cfg
 			default:
 				return nil, nil, d.ArgErr()
@@ -55,10 +67,16 @@ func ParseApp(d *caddyfilepkg.Dispenser) (*config.Server, *config.Client, error)
 func ParseServer(d *caddyfilepkg.Dispenser) (*config.Server, error) {
 	cfg := new(config.Server)
 	for d.Next() {
+		if !d.NextArg() {
+			return nil, d.ArgErr()
+		}
+		cfg.Connector.TLSSubject = d.Val()
 		if d.NextArg() {
 			return nil, d.ArgErr()
 		}
-		return cfg, parseServerBody(d, cfg, d.Nesting())
+		err := parseServerBody(d, cfg, d.Nesting())
+		cfg.Normalize()
+		return cfg, err
 	}
 	return cfg, nil
 }
@@ -66,16 +84,18 @@ func ParseServer(d *caddyfilepkg.Dispenser) (*config.Server, error) {
 func parseServerBody(d *caddyfilepkg.Dispenser, s *config.Server, nesting int) error {
 	for d.NextBlock(nesting) {
 		switch d.Val() {
-		case "connector":
-			if d.NextArg() {
-				s.Connector.Listen = d.Val()
-			}
-			if d.NextArg() {
-				return d.ArgErr()
-			}
-			if err := parseConnectorBody(d, &s.Connector, d.Nesting()); err != nil {
+		case "listen":
+			value, err := singleArg(d)
+			if err != nil {
 				return err
 			}
+			s.Connector.Listen = value
+		case "endpoint":
+			endpoint, err := parseEndpoint(d)
+			if err != nil {
+				return err
+			}
+			s.Connector.Endpoints = append(s.Connector.Endpoints, endpoint)
 		case "guardrails":
 			if d.NextArg() {
 				return d.ArgErr()
@@ -90,28 +110,10 @@ func parseServerBody(d *caddyfilepkg.Dispenser, s *config.Server, nesting int) e
 			if err := parseRuntime(d, &s.Runtime, d.Nesting()); err != nil {
 				return err
 			}
-		default:
-			return d.ArgErr()
-		}
-	}
-	return nil
-}
-
-func parseConnectorBody(d *caddyfilepkg.Dispenser, c *config.Connector, nesting int) error {
-	for d.NextBlock(nesting) {
-		switch d.Val() {
+		case "connector":
+			return d.Err("connector is no longer supported; use server <tls_subject> with listen and endpoint directly")
 		case "tls":
-			value, err := singleArg(d)
-			if err != nil {
-				return err
-			}
-			c.TLSSubject = value
-		case "endpoint":
-			endpoint, err := parseEndpoint(d)
-			if err != nil {
-				return err
-			}
-			c.Endpoints = append(c.Endpoints, endpoint)
+			return d.Err("tls is no longer supported inside bifrost server; pass the TLS subject as server <tls_subject>")
 		default:
 			return d.ArgErr()
 		}
@@ -277,10 +279,16 @@ func parseRuntime(d *caddyfilepkg.Dispenser, r *config.Runtime, nesting int) err
 func ParseClient(d *caddyfilepkg.Dispenser) (*config.Client, error) {
 	cfg := new(config.Client)
 	for d.Next() {
+		if !d.NextArg() {
+			return nil, d.ArgErr()
+		}
+		cfg.Connect = d.Val()
 		if d.NextArg() {
 			return nil, d.ArgErr()
 		}
-		return cfg, parseClientBody(d, cfg, d.Nesting())
+		err := parseClientBody(d, cfg, d.Nesting())
+		cfg.Normalize()
+		return cfg, err
 	}
 	return cfg, nil
 }
@@ -289,11 +297,7 @@ func parseClientBody(d *caddyfilepkg.Dispenser, c *config.Client, nesting int) e
 	for d.NextBlock(nesting) {
 		switch d.Val() {
 		case "connect":
-			value, err := singleArg(d)
-			if err != nil {
-				return err
-			}
-			c.Connect = value
+			return d.Err("connect is no longer supported inside bifrost client; pass the connector address as client <connect-host[:port]>")
 		case "token":
 			value, err := singleArg(d)
 			if err != nil {
@@ -306,19 +310,38 @@ func parseClientBody(d *caddyfilepkg.Dispenser, c *config.Client, nesting int) e
 				return err
 			}
 			c.Forward = value
-		case "tls_ca_file":
+		case "tls":
+			if d.NextArg() {
+				return d.ArgErr()
+			}
+			if err := parseClientTLS(d, c, d.Nesting()); err != nil {
+				return err
+			}
+		case "tls_ca_file", "tls_server_name", "tls_insecure_skip_verify":
+			return d.Err("client TLS options moved under tls { ca_file, server_name, insecure_skip_verify }")
+		default:
+			return d.ArgErr()
+		}
+	}
+	return nil
+}
+
+func parseClientTLS(d *caddyfilepkg.Dispenser, c *config.Client, nesting int) error {
+	for d.NextBlock(nesting) {
+		switch d.Val() {
+		case "ca_file":
 			value, err := singleArg(d)
 			if err != nil {
 				return err
 			}
 			c.TLSCAFile = value
-		case "tls_server_name":
+		case "server_name":
 			value, err := singleArg(d)
 			if err != nil {
 				return err
 			}
 			c.TLSServerName = value
-		case "tls_insecure_skip_verify":
+		case "insecure_skip_verify":
 			if d.NextArg() {
 				return d.ArgErr()
 			}
@@ -339,11 +362,7 @@ func ParseTransport(d *caddyfilepkg.Dispenser) (config.Transport, error) {
 		for nesting := d.Nesting(); d.NextBlock(nesting); {
 			switch d.Val() {
 			case "endpoint":
-				value, err := singleArg(d)
-				if err != nil {
-					return config.Transport{}, err
-				}
-				transport.Endpoint = value
+				return config.Transport{}, d.Err("endpoint is no longer supported in bifrost transport; use the reverse_proxy upstream host as the endpoint")
 			case "app":
 				value, err := singleArg(d)
 				if err != nil {

@@ -89,6 +89,26 @@ func TestClientForwardIsRequired(t *testing.T) {
 	}
 }
 
+func TestClientValidateDefaultsConnectorPort(t *testing.T) {
+	client := &Client{Connect: "public.example.com", Token: "secret", Forward: "127.0.0.1:8080"}
+	if err := client.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if client.Connect != "public.example.com:8443" {
+		t.Fatalf("connect = %q", client.Connect)
+	}
+}
+
+func TestClientValidateKeepsExplicitConnectorPort(t *testing.T) {
+	client := &Client{Connect: "public.example.com:9443", Token: "secret", Forward: "127.0.0.1:8080"}
+	if err := client.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if client.Connect != "public.example.com:9443" {
+		t.Fatalf("connect = %q", client.Connect)
+	}
+}
+
 func TestGuardrailsAndRuntimeMapToBifrost(t *testing.T) {
 	server := &Server{
 		Connector: Connector{

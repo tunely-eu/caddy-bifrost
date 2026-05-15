@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/tunely-eu/caddy-bifrost/internal/config"
@@ -42,8 +43,8 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if next.URL.Scheme == "" {
 		next.URL.Scheme = "http"
 	}
-	if next.URL.Host == "" {
-		next.URL.Host = t.cfg.Endpoint
+	if strings.TrimSpace(next.URL.Host) == "" {
+		return nil, fmt.Errorf("bifrost transport requires a reverse_proxy upstream host to derive the endpoint")
 	}
 	return t.transport.RoundTrip(next)
 }
@@ -60,7 +61,7 @@ func (t *Transport) Cleanup() error {
 	return nil
 }
 
-func (t *Transport) dialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+func (t *Transport) dialContext(ctx context.Context, _, address string) (net.Conn, error) {
 	if t.server == nil {
 		return nil, fmt.Errorf("bifrost server app is not configured")
 	}
@@ -69,5 +70,36 @@ func (t *Transport) dialContext(ctx context.Context, _, _ string) (net.Conn, err
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(t.cfg.DialTimeout))
 		defer cancel()
 	}
-	return t.server.OpenStream(ctx, t.cfg.Endpoint)
+	endpoint, err := endpointFromDialAddress(address)
+	if err != nil {
+		return nil, err
+	}
+	return t.server.OpenStream(ctx, endpoint)
+}
+
+func endpointFromDialAddress(address string) (string, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", fmt.Errorf("bifrost endpoint cannot be derived from an empty upstream address")
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err == nil {
+		host = strings.TrimSpace(host)
+		if host == "" {
+			return "", fmt.Errorf("bifrost endpoint cannot be derived from upstream address %q", address)
+		}
+		return host, nil
+	}
+	if strings.HasPrefix(address, "[") && strings.Contains(address, "]") {
+		host = strings.TrimPrefix(address[:strings.Index(address, "]")], "[")
+	} else if strings.Count(address, ":") == 1 {
+		host, _, _ = strings.Cut(address, ":")
+	} else {
+		host = address
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", fmt.Errorf("bifrost endpoint cannot be derived from upstream address %q", address)
+	}
+	return host, nil
 }

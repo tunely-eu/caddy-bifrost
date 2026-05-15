@@ -21,7 +21,6 @@ func (t *Transport) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	if err != nil {
 		return err
 	}
-	t.Endpoint = cfg.Endpoint
 	t.App = cfg.App
 	t.DialTimeout = cfg.DialTimeout
 	return nil

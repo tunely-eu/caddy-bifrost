@@ -107,7 +107,7 @@ func TestServerClientUsesInjectedAcceptProvider(t *testing.T) {
 	}
 	defer client.Stop()
 
-	transport, err := runtime.NewTransport(config.Transport{Endpoint: "home"}, server)
+	transport, err := runtime.NewTransport(config.Transport{}, server)
 	if err != nil {
 		t.Fatalf("new transport: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestServerClientUsesInjectedAcceptProvider(t *testing.T) {
 }
 
 func TestTransportReturnsErrorWithoutActiveEndpoint(t *testing.T) {
-	transport, err := runtime.NewTransport(config.Transport{Endpoint: "missing"}, nil)
+	transport, err := runtime.NewTransport(config.Transport{}, nil)
 	if err != nil {
 		t.Fatalf("NewTransport: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestTransportReturnsErrorWithoutActiveEndpoint(t *testing.T) {
 }
 
 func TestTransportRoundTripDoesNotMutateRequest(t *testing.T) {
-	transport, err := runtime.NewTransport(config.Transport{Endpoint: "home"}, nil)
+	transport, err := runtime.NewTransport(config.Transport{}, nil)
 	if err != nil {
 		t.Fatalf("NewTransport: %v", err)
 	}
@@ -277,7 +277,7 @@ func startServerClient(t *testing.T, connectorAddr string, originTLS bool) (*run
 		t.Fatalf("client start: %v", err)
 	}
 
-	transport, err := runtime.NewTransport(config.Transport{Endpoint: "home"}, server)
+	transport, err := runtime.NewTransport(config.Transport{}, server)
 	if err != nil {
 		t.Fatalf("new transport: %v", err)
 	}
@@ -315,15 +315,13 @@ func caddyLifecycleConfig(t *testing.T, connectorAddr, httpsAddr, storageDir str
 		}
 	}
 	bifrost {
-		server {
-			connector %s {
-				tls bifrost.example.com
-				endpoint home {
-					token secret
-					policy replace_existing
-					limits {
-						max_streams 10
-					}
+		server bifrost.example.com {
+			listen %s
+			endpoint home {
+				token secret
+				policy replace_existing
+				limits {
+					max_streams 10
 				}
 			}
 		}

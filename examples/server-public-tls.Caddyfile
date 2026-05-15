@@ -1,14 +1,11 @@
 {
 	bifrost {
-		server {
-			connector :8443 {
-				tls public.example.com
-				endpoint home {
-					token {$HOME_TOKEN}
-					policy replace_existing
-					limits {
-						max_streams 100
-					}
+		server public.example.com {
+			endpoint home {
+				token {$HOME_TOKEN}
+				policy replace_existing
+				limits {
+					max_streams 100
 				}
 			}
 		}
@@ -16,9 +13,7 @@
 }
 
 home.example.com {
-	reverse_proxy http://home {
-		transport bifrost {
-			endpoint home
-		}
+	reverse_proxy home {
+		transport bifrost
 	}
 }

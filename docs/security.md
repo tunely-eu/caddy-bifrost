@@ -7,15 +7,14 @@
 The public connector listener always uses TLS and the Bifrost ALPN value. Configure its certificate with:
 
 ```caddyfile
-connector :8443 {
-	tls public.example.com
+server public.example.com {
 	endpoint home {
 		token {$HOME_TOKEN}
 	}
 }
 ```
 
-Caddy's normal TLS configuration controls issuer selection, DNS-01 providers, account email, storage, and local/internal certificates.
+Caddy's normal TLS configuration controls issuer selection, DNS-01 providers, account email, storage, and local/internal certificates. For local or private CAs, use Caddy global options such as `local_certs` or `cert_issuer`, then configure the private client with `tls { ca_file ... }` so it trusts the connector certificate.
 
 ## Tokens
 

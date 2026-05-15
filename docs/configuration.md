@@ -7,17 +7,15 @@
 ```caddyfile
 {
 	bifrost {
-		server {
-			connector :8443 {
-				tls public.example.com
-				endpoint home {
-					token {$HOME_TOKEN}
-					policy replace_existing
-					limits {
-						max_streams 100
-						max_bandwidth_bps 25000000
-						stream_idle_timeout 5m
-					}
+		server public.example.com {
+			listen :8443
+			endpoint home {
+				token {$HOME_TOKEN}
+				policy replace_existing
+				limits {
+					max_streams 100
+					max_bandwidth_bps 25000000
+					stream_idle_timeout 5m
 				}
 			}
 		}
@@ -29,8 +27,8 @@ Fields:
 
 | Directive | Meaning |
 | --- | --- |
-| `connector <listen>` | Listener for private clients. Defaults to `:8443` when omitted. |
-| `tls <subject>` | Certificate subject managed by Caddy's TLS app for the connector listener. |
+| `server <subject>` | Certificate subject managed by Caddy's TLS app for the connector listener. |
+| `listen <addr>` | Listener for private clients. Defaults to `:8443` when omitted. |
 | `endpoint <key>` | Stable Bifrost endpoint identity used by transports and passthrough routes. |
 | `token <value>` | Shared secret accepted for the endpoint. |
 | `policy <mode>` | `reject_if_exists`, `replace_existing`, or `allow_parallel`. |
@@ -86,11 +84,9 @@ Unset runtime values use Bifrost defaults.
 ```caddyfile
 {
 	bifrost {
-		client {
-			connect public.example.com:8443
+		client public.example.com {
 			token {$HOME_TOKEN}
 			forward 127.0.0.1:8080
-			tls_server_name public.example.com
 		}
 	}
 }
@@ -100,25 +96,54 @@ Fields:
 
 | Directive | Meaning |
 | --- | --- |
-| `connect` | Public connector address. Required. |
+| `client <connect-host[:port]>` | Public connector address. Defaults to port `8443` when omitted. |
 | `token` | Shared token configured on the matching server endpoint. Required. |
 | `forward` | Private target reached for each accepted stream. Required. |
-| `tls_ca_file` | Optional CA bundle for private or self-signed connector certificates. |
-| `tls_server_name` | Optional TLS server name override. |
-| `tls_insecure_skip_verify` | Development-only TLS verification bypass. |
+| `tls ca_file` | Optional CA bundle for private or self-signed connector certificates. |
+| `tls server_name` | Optional TLS server name override. |
+| `tls insecure_skip_verify` | Development-only TLS verification bypass. |
+
+For private CA or self-signed connector certificates, configure the public server with Caddy's normal TLS options and trust that CA from the private client:
+
+```caddyfile
+{
+	local_certs
+
+	bifrost {
+		server bifrost-server {
+			endpoint home {
+				token {$HOME_TOKEN}
+			}
+		}
+	}
+}
+```
+
+```caddyfile
+{
+	bifrost {
+		client bifrost-server {
+			token {$HOME_TOKEN}
+			forward 127.0.0.1:8080
+			tls {
+				ca_file /data/caddy/pki/authorities/local/root.crt
+			}
+		}
+	}
+}
+```
 
 ## Reverse Proxy Transport
 
 ```caddyfile
-reverse_proxy http://home {
+reverse_proxy home {
 	transport bifrost {
-		endpoint home
 		dial_timeout 5s
 	}
 }
 ```
 
-`endpoint` must match an endpoint key configured on the server runtime.
+The upstream host is the Bifrost endpoint. `reverse_proxy home` and `reverse_proxy http://home` both use endpoint `home`; the host is not resolved through DNS by the Bifrost transport.
 
 ## Dynamic Accept Providers
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 const (
 	DefaultConnectorListen = ":8443"
+	DefaultConnectorPort   = "8443"
 	DefaultAppName         = "bifrost"
 )
 
@@ -67,12 +69,13 @@ type Client struct {
 }
 
 type Transport struct {
-	Endpoint    string         `json:"endpoint,omitempty"`
 	App         string         `json:"app,omitempty"`
 	DialTimeout caddy.Duration `json:"dial_timeout,omitempty"`
 }
 
 func (s *Server) Normalize() {
+	s.Connector.Listen = strings.TrimSpace(s.Connector.Listen)
+	s.Connector.TLSSubject = strings.TrimSpace(s.Connector.TLSSubject)
 	if s.Connector.Listen == "" {
 		s.Connector.Listen = DefaultConnectorListen
 	}
@@ -139,6 +142,7 @@ func (c *Client) Validate() error {
 	if c == nil {
 		return fmt.Errorf("client runtime is required")
 	}
+	c.Normalize()
 	if strings.TrimSpace(c.Connect) == "" {
 		return fmt.Errorf("client.connect is required")
 	}
@@ -151,8 +155,38 @@ func (c *Client) Validate() error {
 	return nil
 }
 
+func (c *Client) Normalize() {
+	c.Connect = normalizeConnectAddress(c.Connect)
+	c.Token = strings.TrimSpace(c.Token)
+	c.Forward = strings.TrimSpace(c.Forward)
+	c.TLSCAFile = strings.TrimSpace(c.TLSCAFile)
+	c.TLSServerName = strings.TrimSpace(c.TLSServerName)
+}
+
+func normalizeConnectAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" || strings.Contains(address, "://") {
+		return address
+	}
+	if host, port, err := net.SplitHostPort(address); err == nil {
+		if port == "" {
+			return net.JoinHostPort(host, DefaultConnectorPort)
+		}
+		return address
+	}
+	if strings.HasPrefix(address, "[") && strings.HasSuffix(address, "]") {
+		return net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(address, "["), "]"), DefaultConnectorPort)
+	}
+	if strings.Count(address, ":") == 1 && strings.HasSuffix(address, ":") {
+		return net.JoinHostPort(strings.TrimSuffix(address, ":"), DefaultConnectorPort)
+	}
+	if strings.Count(address, ":") > 1 {
+		return net.JoinHostPort(address, DefaultConnectorPort)
+	}
+	return net.JoinHostPort(address, DefaultConnectorPort)
+}
+
 func (t *Transport) Normalize() {
-	t.Endpoint = strings.TrimSpace(t.Endpoint)
 	t.App = strings.TrimSpace(t.App)
 	if t.App == "" {
 		t.App = DefaultAppName
@@ -164,9 +198,6 @@ func (t *Transport) Validate() error {
 		return fmt.Errorf("transport config is required")
 	}
 	t.Normalize()
-	if t.Endpoint == "" {
-		return fmt.Errorf("transport.endpoint is required")
-	}
 	return nil
 }
 
