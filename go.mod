@@ -6,7 +6,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	github.com/tunely-eu/bifrost v0.3.0
+	github.com/tunely-eu/bifrost v0.3.1
 	go.uber.org/zap v1.27.1
 )
 
