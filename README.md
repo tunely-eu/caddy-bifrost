@@ -34,7 +34,7 @@ Many self-hosters and small teams already trust Caddy as their public reverse pr
 | Private TLS mode | Public Caddy routes by ClientHello SNI and forwards raw TLS to private Caddy. |
 | Endpoint ownership policy | Reconnect behavior is explicit: reject, replace, or allow parallel sessions. |
 | Guardrails and metrics | Bifrost limits and Prometheus metrics are exposed through Caddy's runtime. |
-| Product-agnostic core | The module embeds [`bifrost`](https://github.com/tunely-eu/bifrost) and stays independent of hosted control planes. |
+| Product-agnostic core | The module embeds [`bifrost`](https://github.com/tunely-eu/bifrost) and stays independent of hosted control planes while exposing generic admission and passthrough resolver hooks. |
 
 ## Modes
 

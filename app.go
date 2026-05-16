@@ -1,6 +1,7 @@
 package caddybifrost
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -38,6 +39,18 @@ type App struct {
 type AcceptProviderModule interface {
 	caddy.Module
 	bifrost.AcceptProvider
+}
+
+// PassthroughResolverModule is implemented by Caddy modules that resolve raw
+// TLS ClientHello SNI names to Bifrost endpoint keys.
+type PassthroughResolverModule interface {
+	caddy.Module
+	PassthroughResolver
+}
+
+// PassthroughResolver maps one inbound TLS SNI name to a Bifrost endpoint.
+type PassthroughResolver interface {
+	ResolvePassthrough(ctx context.Context, serverName string) (endpoint string, ok bool, err error)
 }
 
 type appRuntime interface {

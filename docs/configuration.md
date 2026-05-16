@@ -223,3 +223,11 @@ When a custom accept provider is configured, static `endpoint` blocks must be om
 The listener wrapper must appear before Caddy's `tls` listener wrapper. Without the explicit `tls` marker, Caddy places custom listener wrappers after TLS, which is too late for raw TLS passthrough.
 
 Private TLS hostnames are not configured as Caddy HTTP site blocks, so Caddy does not include them in automatic HTTPS certificate management. If no public Caddy route exists on the wrapped listener, add a catch-all `:443 { abort }` block to make Caddy open the listener.
+
+Embedded builds can replace static `route_sni` mappings with a custom Caddy module implementing:
+
+```go
+ResolvePassthrough(context.Context, string) (endpoint string, ok bool, err error)
+```
+
+through the `bifrost.passthrough_resolvers` namespace. Static `route_sni` mappings and `passthrough_resolver` are mutually exclusive. Resolver implementations own any caching or control-plane lookup behavior.

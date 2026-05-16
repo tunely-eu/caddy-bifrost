@@ -2,6 +2,7 @@ package caddybifrost
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -29,6 +30,11 @@ type ListenerWrapper struct {
 	// Routes maps exact SNI names to Bifrost endpoint keys.
 	Routes []config.SNIRoute `json:"routes,omitempty"`
 
+	// PassthroughResolverRaw optionally loads a custom Caddy module from the
+	// bifrost.passthrough_resolvers namespace. It replaces static route_sni
+	// mappings.
+	PassthroughResolverRaw json.RawMessage `json:"passthrough_resolver,omitempty" caddy:"namespace=bifrost.passthrough_resolvers inline_key=resolver"`
+
 	ctx        context.Context
 	logger     *zap.Logger
 	bifrostApp *App
@@ -51,6 +57,10 @@ func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 	w.ctx = ctx.Context
 	w.logger = ctx.Logger(w)
 
+	if len(w.Routes) > 0 && len(w.PassthroughResolverRaw) > 0 {
+		return fmt.Errorf("bifrost listener routes cannot be combined with passthrough_resolver")
+	}
+
 	app, err := ctx.App(w.App)
 	if err != nil {
 		return fmt.Errorf("getting %s app: %w", w.App, err)
@@ -61,7 +71,18 @@ func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 	}
 	w.bifrostApp = bifrostApp
 
-	if len(w.Routes) > 0 {
+	if len(w.PassthroughResolverRaw) > 0 {
+		resolver, err := w.loadPassthroughResolver(ctx)
+		if err != nil {
+			return err
+		}
+		server, err := w.serverRuntime()
+		if err != nil {
+			return err
+		}
+		server.SetPassthroughResolver(resolver)
+		w.logger.Info("installed bifrost passthrough resolver")
+	} else if len(w.Routes) > 0 {
 		resolver, err := runtime.NewStaticPassthroughResolver(w.Routes)
 		if err != nil {
 			return fmt.Errorf("bifrost listener passthrough routes: %w", err)
@@ -74,6 +95,21 @@ func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 		w.logger.Info("installed bifrost passthrough routes", zap.Int("routes", len(w.Routes)))
 	}
 	return nil
+}
+
+func (w *ListenerWrapper) loadPassthroughResolver(ctx caddy.Context) (PassthroughResolver, error) {
+	if len(w.PassthroughResolverRaw) == 0 {
+		return nil, nil
+	}
+	mod, err := ctx.LoadModule(w, "PassthroughResolverRaw")
+	if err != nil {
+		return nil, fmt.Errorf("loading bifrost passthrough resolver: %w", err)
+	}
+	resolver, ok := mod.(PassthroughResolver)
+	if !ok {
+		return nil, fmt.Errorf("bifrost passthrough resolver module has unexpected type %T", mod)
+	}
+	return resolver, nil
 }
 
 // WrapListener returns a listener that intercepts matching TLS ClientHello SNI
