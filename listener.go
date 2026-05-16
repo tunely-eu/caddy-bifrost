@@ -15,8 +15,18 @@ import (
 	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
 )
 
+// ListenerWrapper routes raw TLS connections to Bifrost endpoints before Caddy's
+// TLS listener wrapper consumes the connection.
+//
+// It is used for private TLS / SNI passthrough deployments. Matching ClientHello
+// SNI names are proxied through Bifrost as raw streams. Non-matching connections
+// are replayed into Caddy's normal listener pipeline.
 type ListenerWrapper struct {
-	App    string            `json:"app,omitempty"`
+	// App is the Caddy app name that owns the Bifrost server runtime. It defaults
+	// to "bifrost".
+	App string `json:"app,omitempty"`
+
+	// Routes maps exact SNI names to Bifrost endpoint keys.
 	Routes []config.SNIRoute `json:"routes,omitempty"`
 
 	ctx        context.Context
@@ -24,6 +34,7 @@ type ListenerWrapper struct {
 	bifrostApp *App
 }
 
+// CaddyModule returns the module registration for the listener wrapper.
 func (*ListenerWrapper) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "caddy.listeners.bifrost",
@@ -31,6 +42,8 @@ func (*ListenerWrapper) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// Provision resolves the Bifrost server runtime and installs any static SNI
+// passthrough routes.
 func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 	if strings.TrimSpace(w.App) == "" {
 		w.App = config.DefaultAppName
@@ -63,10 +76,13 @@ func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 	return nil
 }
 
+// WrapListener returns a listener that intercepts matching TLS ClientHello SNI
+// names and forwards them through Bifrost.
 func (w *ListenerWrapper) WrapListener(listener net.Listener) net.Listener {
 	return &bifrostListener{Listener: listener, wrapper: w}
 }
 
+// UnmarshalCaddyfile parses the "bifrost" listener wrapper block.
 func (w *ListenerWrapper) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.Next()
 	if d.NextArg() {

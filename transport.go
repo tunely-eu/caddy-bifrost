@@ -10,13 +10,24 @@ import (
 	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
 )
 
+// Transport is a Caddy reverse_proxy transport that opens streams to active
+// Bifrost endpoints instead of dialing DNS or TCP upstream addresses directly.
+//
+// The upstream dial address is interpreted as the Bifrost endpoint key. For
+// example, "reverse_proxy home { transport bifrost }" opens a stream to endpoint
+// "home".
 type Transport struct {
-	App         string         `json:"app,omitempty"`
+	// App is the Caddy app name that owns the Bifrost server runtime. It defaults
+	// to "bifrost".
+	App string `json:"app,omitempty"`
+
+	// DialTimeout bounds how long RoundTrip waits for a stream to an endpoint.
 	DialTimeout caddy.Duration `json:"dial_timeout,omitempty"`
 
 	transport *runtime.Transport
 }
 
+// CaddyModule returns the module registration for the reverse_proxy transport.
 func (*Transport) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.reverse_proxy.transport.bifrost",
@@ -24,6 +35,8 @@ func (*Transport) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// Provision resolves the configured Bifrost app and prepares the runtime
+// transport.
 func (t *Transport) Provision(ctx caddy.Context) error {
 	cfg := config.Transport{
 		App:         t.App,
@@ -55,6 +68,8 @@ func (t *Transport) Provision(ctx caddy.Context) error {
 	return nil
 }
 
+// RoundTrip proxies one HTTP request through a Bifrost stream to the endpoint
+// named by the request URL host.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.transport == nil {
 		return nil, fmt.Errorf("bifrost transport is not provisioned")
@@ -62,6 +77,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.transport.RoundTrip(req)
 }
 
+// Cleanup releases transport resources during Caddy shutdown or reload.
 func (t *Transport) Cleanup() error {
 	if t.transport != nil {
 		return t.transport.Cleanup()

@@ -1,3 +1,5 @@
+// Package config contains the JSON and Caddyfile-adapted configuration model
+// used by the caddy-bifrost modules.
 package config
 
 import (
@@ -11,68 +13,153 @@ import (
 )
 
 const (
+	// DefaultConnectorListen is the public connector listen address used when no
+	// listen address is configured.
 	DefaultConnectorListen = ":8443"
-	DefaultConnectorPort   = "8443"
-	DefaultAppName         = "bifrost"
+
+	// DefaultConnectorPort is added to client connect addresses that omit a port.
+	DefaultConnectorPort = "8443"
+
+	// DefaultAppName is the Caddy app name used by transports and listener
+	// wrappers when no app name is configured.
+	DefaultAppName = "bifrost"
 )
 
+// Server is the JSON configuration for the public Bifrost server runtime.
 type Server struct {
-	Connector  Connector  `json:"connector,omitempty"`
+	// Connector configures the TLS connector listener and static endpoints.
+	Connector Connector `json:"connector,omitempty"`
+
+	// Guardrails configures server-wide ceilings enforced after every admission
+	// decision.
 	Guardrails Guardrails `json:"guardrails,omitempty"`
-	Runtime    Runtime    `json:"runtime,omitempty"`
+
+	// Runtime configures low-level tunnel runtime timeouts and buffers.
+	Runtime Runtime `json:"runtime,omitempty"`
 }
 
+// Connector configures the public listener that private clients dial.
 type Connector struct {
-	Listen     string     `json:"listen,omitempty"`
-	TLSSubject string     `json:"tls_subject,omitempty"`
-	Endpoints  []Endpoint `json:"endpoints,omitempty"`
+	// Listen is the connector listener address. It defaults to :8443.
+	Listen string `json:"listen,omitempty"`
+
+	// TLSSubject is the certificate subject Caddy should manage for connector
+	// TLS.
+	TLSSubject string `json:"tls_subject,omitempty"`
+
+	// Endpoints are static token-backed endpoint definitions. They must be empty
+	// when a custom accept provider is configured.
+	Endpoints []Endpoint `json:"endpoints,omitempty"`
 }
 
+// Endpoint configures one static Bifrost endpoint accepted by token.
 type Endpoint struct {
-	Key         string         `json:"key,omitempty"`
-	Token       string         `json:"token,omitempty"`
-	Policy      string         `json:"policy,omitempty"`
-	MaxParallel int            `json:"max_parallel,omitempty"`
-	Limits      EndpointLimits `json:"limits,omitempty"`
+	// Key is the endpoint identity used by reverse_proxy upstreams and SNI routes.
+	Key string `json:"key,omitempty"`
+
+	// Token is the shared secret that admits the private connector session.
+	Token string `json:"token,omitempty"`
+
+	// Policy controls reconnect behavior. Supported values are reject_if_exists,
+	// replace_existing, and allow_parallel.
+	Policy string `json:"policy,omitempty"`
+
+	// MaxParallel bounds active sessions when Policy is allow_parallel.
+	MaxParallel int `json:"max_parallel,omitempty"`
+
+	// Limits configures per-session limits for this endpoint.
+	Limits EndpointLimits `json:"limits,omitempty"`
 }
 
+// EndpointLimits configures per-session stream, bandwidth, and idle-time limits.
 type EndpointLimits struct {
-	MaxStreams        int            `json:"max_streams,omitempty"`
-	MaxBandwidthBPS   int64          `json:"max_bandwidth_bps,omitempty"`
+	// MaxStreams limits concurrent streams in one connector session.
+	MaxStreams int `json:"max_streams,omitempty"`
+
+	// MaxBandwidthBPS limits aggregate session bandwidth in bytes per second.
+	MaxBandwidthBPS int64 `json:"max_bandwidth_bps,omitempty"`
+
+	// StreamIdleTimeout closes streams after this duration with no copied bytes.
 	StreamIdleTimeout caddy.Duration `json:"stream_idle_timeout,omitempty"`
 }
 
+// Guardrails configures server-wide ceilings for accepted endpoint limits and
+// connector hello metadata.
 type Guardrails struct {
-	MaxSessions               int            `json:"max_sessions,omitempty"`
-	MaxStreamsPerSession      int            `json:"max_streams_per_session,omitempty"`
-	MaxBandwidthBPSPerSession int64          `json:"max_bandwidth_bps_per_session,omitempty"`
-	MinStreamIdleTimeout      caddy.Duration `json:"min_stream_idle_timeout,omitempty"`
-	MaxStreamIdleTimeout      caddy.Duration `json:"max_stream_idle_timeout,omitempty"`
-	MaxHeaders                int            `json:"max_headers,omitempty"`
-	MaxHeaderBytes            int            `json:"max_header_bytes,omitempty"`
+	// MaxSessions limits active connector sessions on the server.
+	MaxSessions int `json:"max_sessions,omitempty"`
+
+	// MaxStreamsPerSession is the highest per-endpoint max_streams value allowed.
+	MaxStreamsPerSession int `json:"max_streams_per_session,omitempty"`
+
+	// MaxBandwidthBPSPerSession is the highest per-endpoint bandwidth limit
+	// allowed.
+	MaxBandwidthBPSPerSession int64 `json:"max_bandwidth_bps_per_session,omitempty"`
+
+	// MinStreamIdleTimeout is the shortest stream idle timeout an endpoint may
+	// request.
+	MinStreamIdleTimeout caddy.Duration `json:"min_stream_idle_timeout,omitempty"`
+
+	// MaxStreamIdleTimeout is the longest stream idle timeout an endpoint may
+	// request.
+	MaxStreamIdleTimeout caddy.Duration `json:"max_stream_idle_timeout,omitempty"`
+
+	// MaxHeaders limits connector hello headers.
+	MaxHeaders int `json:"max_headers,omitempty"`
+
+	// MaxHeaderBytes limits combined connector hello header bytes.
+	MaxHeaderBytes int `json:"max_header_bytes,omitempty"`
 }
 
+// Runtime configures low-level Bifrost transport behavior.
 type Runtime struct {
-	HandshakeTimeout        caddy.Duration `json:"handshake_timeout,omitempty"`
-	StreamCopyBufferBytes   int            `json:"stream_copy_buffer_bytes,omitempty"`
+	// HandshakeTimeout bounds TLS and Bifrost hello negotiation.
+	HandshakeTimeout caddy.Duration `json:"handshake_timeout,omitempty"`
+
+	// StreamCopyBufferBytes sets the proxy copy buffer size.
+	StreamCopyBufferBytes int `json:"stream_copy_buffer_bytes,omitempty"`
+
+	// TunnelKeepAliveInterval controls yamux keepalive frequency.
 	TunnelKeepAliveInterval caddy.Duration `json:"tunnel_keepalive_interval,omitempty"`
-	TunnelKeepAliveTimeout  caddy.Duration `json:"tunnel_keepalive_timeout,omitempty"`
+
+	// TunnelKeepAliveTimeout closes a tunnel when keepalive responses stop.
+	TunnelKeepAliveTimeout caddy.Duration `json:"tunnel_keepalive_timeout,omitempty"`
 }
 
+// Client is the JSON configuration for the private Bifrost client runtime.
 type Client struct {
-	Connect               string `json:"connect,omitempty"`
-	Token                 string `json:"token,omitempty"`
-	Forward               string `json:"forward,omitempty"`
-	TLSCAFile             string `json:"tls_ca_file,omitempty"`
-	TLSServerName         string `json:"tls_server_name,omitempty"`
-	TLSInsecureSkipVerify bool   `json:"tls_insecure_skip_verify,omitempty"`
+	// Connect is the public connector address. Port 8443 is added when omitted.
+	Connect string `json:"connect,omitempty"`
+
+	// Token is the shared secret sent to the matching server endpoint.
+	Token string `json:"token,omitempty"`
+
+	// Forward is the private TCP target reached for each accepted stream.
+	Forward string `json:"forward,omitempty"`
+
+	// TLSCAFile optionally points at a CA bundle for private or self-signed
+	// connector certificates.
+	TLSCAFile string `json:"tls_ca_file,omitempty"`
+
+	// TLSServerName overrides the connector TLS server name.
+	TLSServerName string `json:"tls_server_name,omitempty"`
+
+	// TLSInsecureSkipVerify disables connector certificate verification. It is
+	// development-only.
+	TLSInsecureSkipVerify bool `json:"tls_insecure_skip_verify,omitempty"`
 }
 
+// Transport is the JSON configuration for the reverse_proxy Bifrost transport.
 type Transport struct {
-	App         string         `json:"app,omitempty"`
+	// App is the Caddy app name that owns the Bifrost server runtime. It defaults
+	// to "bifrost".
+	App string `json:"app,omitempty"`
+
+	// DialTimeout bounds waiting for a stream to an endpoint.
 	DialTimeout caddy.Duration `json:"dial_timeout,omitempty"`
 }
 
+// Normalize trims string fields and fills implicit defaults.
 func (s *Server) Normalize() {
 	s.Connector.Listen = strings.TrimSpace(s.Connector.Listen)
 	s.Connector.TLSSubject = strings.TrimSpace(s.Connector.TLSSubject)
@@ -86,10 +173,13 @@ func (s *Server) Normalize() {
 	}
 }
 
+// Validate validates a static server configuration.
 func (s *Server) Validate() error {
 	return s.ValidateWithProvider(false)
 }
 
+// ValidateWithProvider validates server config and accounts for whether a
+// custom accept provider is configured.
 func (s *Server) ValidateWithProvider(providerConfigured bool) error {
 	if s == nil {
 		return fmt.Errorf("server runtime is required")
@@ -138,6 +228,7 @@ func (s *Server) ValidateWithProvider(providerConfigured bool) error {
 	return nil
 }
 
+// Validate validates the private client runtime configuration.
 func (c *Client) Validate() error {
 	if c == nil {
 		return fmt.Errorf("client runtime is required")
@@ -155,6 +246,7 @@ func (c *Client) Validate() error {
 	return nil
 }
 
+// Normalize trims client fields and adds the default connector port when needed.
 func (c *Client) Normalize() {
 	c.Connect = normalizeConnectAddress(c.Connect)
 	c.Token = strings.TrimSpace(c.Token)
@@ -186,6 +278,7 @@ func normalizeConnectAddress(address string) string {
 	return net.JoinHostPort(address, DefaultConnectorPort)
 }
 
+// Normalize trims the transport config and fills the default app name.
 func (t *Transport) Normalize() {
 	t.App = strings.TrimSpace(t.App)
 	if t.App == "" {
@@ -193,6 +286,7 @@ func (t *Transport) Normalize() {
 	}
 }
 
+// Validate validates transport config.
 func (t *Transport) Validate() error {
 	if t == nil {
 		return fmt.Errorf("transport config is required")
@@ -201,6 +295,7 @@ func (t *Transport) Validate() error {
 	return nil
 }
 
+// StaticClients converts configured endpoints into core Bifrost static clients.
 func (s *Server) StaticClients() ([]bifrost.StaticClient, error) {
 	clients := make([]bifrost.StaticClient, 0, len(s.Connector.Endpoints))
 	for index, endpoint := range s.Connector.Endpoints {
@@ -216,6 +311,7 @@ func (s *Server) StaticClients() ([]bifrost.StaticClient, error) {
 	return clients, nil
 }
 
+// StaticClient converts one endpoint into a core Bifrost static client.
 func (e Endpoint) StaticClient() (bifrost.StaticClient, error) {
 	limits, err := e.Limits.PlanLimits()
 	if err != nil {
@@ -232,6 +328,7 @@ func (e Endpoint) StaticClient() (bifrost.StaticClient, error) {
 	}, nil
 }
 
+// Validate checks endpoint limits before conversion to core Bifrost limits.
 func (l EndpointLimits) Validate() error {
 	if l.MaxStreams < 0 {
 		return fmt.Errorf("max_streams must be positive")
@@ -246,6 +343,7 @@ func (l EndpointLimits) Validate() error {
 	return err
 }
 
+// PlanLimits converts Caddy duration-based limits into core Bifrost plan limits.
 func (l EndpointLimits) PlanLimits() (bifrost.PlanLimits, error) {
 	var idleSeconds int
 	if l.StreamIdleTimeout > 0 {
@@ -262,6 +360,7 @@ func (l EndpointLimits) PlanLimits() (bifrost.PlanLimits, error) {
 	}, nil
 }
 
+// Validate checks server guardrail values.
 func (g Guardrails) Validate() error {
 	if g.MaxSessions < 0 {
 		return fmt.Errorf("max_sessions must be positive")
@@ -290,6 +389,7 @@ func (g Guardrails) Validate() error {
 	return nil
 }
 
+// BifrostGuardrails converts Caddy guardrails into core Bifrost guardrails.
 func (g Guardrails) BifrostGuardrails() bifrost.Guardrails {
 	return bifrost.Guardrails{
 		MaxSessions:               g.MaxSessions,
@@ -302,6 +402,7 @@ func (g Guardrails) BifrostGuardrails() bifrost.Guardrails {
 	}
 }
 
+// Validate checks runtime tuning values.
 func (r Runtime) Validate() error {
 	if r.HandshakeTimeout < 0 {
 		return fmt.Errorf("handshake_timeout must be positive")
@@ -318,6 +419,7 @@ func (r Runtime) Validate() error {
 	return nil
 }
 
+// BifrostRuntime converts Caddy runtime tuning into core Bifrost runtime config.
 func (r Runtime) BifrostRuntime() bifrost.Runtime {
 	return bifrost.Runtime{
 		HandshakeTimeout:        time.Duration(r.HandshakeTimeout),

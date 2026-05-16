@@ -9,8 +9,7 @@ release.
 
 Please do not open public issues for suspected vulnerabilities.
 
-Report security issues through GitHub Security Advisories for this repository.
-If advisories are unavailable, contact the maintainers privately with:
+Use GitHub private vulnerability reporting for this repository. Open a private vulnerability report from the repository's **Security** tab and include:
 
 - affected version or commit
 - a clear reproduction path

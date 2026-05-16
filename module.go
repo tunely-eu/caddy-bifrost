@@ -1,3 +1,16 @@
+// Package caddybifrost registers Bifrost tunnel support for Caddy.
+//
+// The package provides three Caddy modules:
+//
+//   - the "bifrost" app, which runs either a public connector server or a
+//     private connector client
+//   - the "http.reverse_proxy.transport.bifrost" transport, which lets public
+//     Caddy proxy HTTP requests to an active Bifrost endpoint
+//   - the "caddy.listeners.bifrost" listener wrapper, which can route raw TLS
+//     streams by ClientHello SNI before Caddy's HTTP pipeline
+//
+// Import the package for its side effects when building Caddy with xcaddy or a
+// custom main package.
 package caddybifrost
 
 import (

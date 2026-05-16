@@ -5,15 +5,22 @@ import (
 	"strings"
 )
 
+// RouteTable resolves exact TLS SNI names to Bifrost endpoint keys.
 type RouteTable struct {
 	byServerName map[string]string
 }
 
+// SNIRoute maps one exact ClientHello SNI name to a Bifrost endpoint.
 type SNIRoute struct {
+	// ServerName is the exact SNI name to match. Wildcards are not supported.
 	ServerName string `json:"server_name,omitempty"`
-	Endpoint   string `json:"endpoint,omitempty"`
+
+	// Endpoint is the Bifrost endpoint key that receives matching raw TLS
+	// streams.
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
+// NewRouteTable validates SNI routes and returns a lookup table.
 func NewRouteTable(routes []SNIRoute) (RouteTable, error) {
 	table := RouteTable{byServerName: make(map[string]string, len(routes))}
 	for index, route := range routes {
@@ -36,11 +43,14 @@ func NewRouteTable(routes []SNIRoute) (RouteTable, error) {
 	return table, nil
 }
 
+// Resolve returns the endpoint configured for serverName.
 func (r RouteTable) Resolve(serverName string) (string, bool) {
 	endpoint, ok := r.byServerName[NormalizeServerName(serverName)]
 	return endpoint, ok
 }
 
+// NormalizeServerName lowercases serverName, trims spaces, and removes a final
+// DNS root dot.
 func NormalizeServerName(serverName string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(serverName), "."))
 }

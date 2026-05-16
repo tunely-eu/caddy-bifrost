@@ -12,15 +12,29 @@ import (
 	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
 )
 
+// App is the Caddy application module that runs one Bifrost runtime.
+//
+// Configure exactly one of Server or Client. A server runtime runs on the public
+// Caddy instance and accepts outbound connector sessions. A client runtime runs
+// on the private side and dials the public connector listener.
 type App struct {
-	Server            *config.Server  `json:"server,omitempty"`
-	Client            *config.Client  `json:"client,omitempty"`
+	// Server configures the public connector server runtime.
+	Server *config.Server `json:"server,omitempty"`
+
+	// Client configures the private connector client runtime.
+	Client *config.Client `json:"client,omitempty"`
+
+	// AcceptProviderRaw optionally loads a custom Caddy module from the
+	// bifrost.accept_providers namespace. It is only valid with the server
+	// runtime and replaces static endpoint token config.
 	AcceptProviderRaw json.RawMessage `json:"accept_provider,omitempty" caddy:"namespace=bifrost.accept_providers inline_key=provider"`
 
 	logger  *zap.Logger
 	runtime appRuntime
 }
 
+// AcceptProviderModule is the interface implemented by Caddy modules that want
+// to provide dynamic Bifrost admission decisions.
 type AcceptProviderModule interface {
 	caddy.Module
 	bifrost.AcceptProvider
@@ -31,6 +45,7 @@ type appRuntime interface {
 	Stop() error
 }
 
+// CaddyModule returns the module registration for the Bifrost app.
 func (*App) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "bifrost",
@@ -38,6 +53,8 @@ func (*App) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// Provision validates app config, wires metrics, loads optional admission
+// providers, and prepares the selected runtime.
 func (a *App) Provision(ctx caddy.Context) error {
 	a.logger = ctx.Logger(a)
 	runtimeName, err := a.runtimeName()
@@ -95,6 +112,7 @@ func (a *App) loadAcceptProvider(ctx caddy.Context) (bifrost.AcceptProvider, err
 	return provider, nil
 }
 
+// Start starts the provisioned Bifrost server or client runtime.
 func (a *App) Start() error {
 	if a.runtime == nil {
 		return fmt.Errorf("bifrost app is not provisioned")
@@ -102,6 +120,7 @@ func (a *App) Start() error {
 	return a.runtime.Start()
 }
 
+// Stop stops the running Bifrost runtime. It is safe to call on an unstarted app.
 func (a *App) Stop() error {
 	if a.runtime != nil {
 		return a.runtime.Stop()
