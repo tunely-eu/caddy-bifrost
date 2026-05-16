@@ -441,11 +441,18 @@ func waitPublicHTTPSResponse(t *testing.T, addr string) {
 
 func assertTCPListenAvailable(t *testing.T, addr string) {
 	t.Helper()
-	listener, err := net.Listen("tcp", addr)
-	if err != nil {
-		t.Fatalf("expected %s to be released: %v", addr, err)
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		listener, err := net.Listen("tcp", addr)
+		if err == nil {
+			_ = listener.Close()
+			return
+		}
+		lastErr = err
+		time.Sleep(50 * time.Millisecond)
 	}
-	_ = listener.Close()
+	t.Fatalf("expected %s to be released: %v", addr, lastErr)
 }
 
 func tcpPort(t *testing.T, addr string) string {
