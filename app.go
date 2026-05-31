@@ -99,7 +99,7 @@ func (a *App) Provision(ctx caddy.Context) error {
 		a.runtime = server
 		return nil
 	case "client":
-		client, err := runtime.NewClient(a.Client, a.logger.Named("client"), runtime.WithClientObserver(observer))
+		client, err := newClientRuntimeLease(a.Client, a.logger.Named("client"), observer)
 		if err != nil {
 			return err
 		}
