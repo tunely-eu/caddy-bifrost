@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 
 func init() {
 	caddy.RegisterModule(new(testPassthroughResolverModule))
+	caddy.RegisterModule(new(testPassthroughStreamObserverModule))
 }
 
 type testPassthroughResolverModule struct {
@@ -39,6 +42,18 @@ func (r *testPassthroughResolverModule) ResolvePassthrough(_ context.Context, se
 		return r.Endpoint, true, nil
 	}
 	return "", false, nil
+}
+
+type testPassthroughStreamObserverModule struct{}
+
+func (*testPassthroughStreamObserverModule) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "bifrost.passthrough_stream_observers.test",
+		New: func() caddy.Module { return new(testPassthroughStreamObserverModule) },
+	}
+}
+
+func (*testPassthroughStreamObserverModule) ObservePassthroughStream(context.Context, PassthroughStreamObservation) {
 }
 
 func TestListenerWrapperUnmarshalCaddyfileRoutes(t *testing.T) {
@@ -126,6 +141,31 @@ func TestListenerWrapperLoadsPassthroughResolverModule(t *testing.T) {
 	}
 }
 
+func TestListenerWrapperLoadsPassthroughObserverModule(t *testing.T) {
+	configJSON := adaptCaddyfile(t, `{
+	local_certs
+}`)
+	var cfg caddy.Config
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		t.Fatalf("unmarshal caddy config: %v", err)
+	}
+	ctx, err := caddy.ProvisionContext(&cfg)
+	if err != nil {
+		t.Fatalf("ProvisionContext: %v", err)
+	}
+
+	wrapper := &ListenerWrapper{
+		PassthroughObserverRaw: json.RawMessage(`{"observer":"test"}`),
+	}
+	observer, err := wrapper.loadPassthroughObserver(ctx)
+	if err != nil {
+		t.Fatalf("loadPassthroughObserver: %v", err)
+	}
+	if observer == nil {
+		t.Fatal("expected observer")
+	}
+}
+
 func TestListenerWrapperRejectsRoutesWithPassthroughResolver(t *testing.T) {
 	wrapper := &ListenerWrapper{
 		Routes:                 []config.SNIRoute{{ServerName: "home.example.com", Endpoint: "home"}},
@@ -144,6 +184,27 @@ func TestListenerWrapperRejectsRoutesWithPassthroughResolver(t *testing.T) {
 	}
 	if err := wrapper.Provision(ctx); err == nil {
 		t.Fatal("expected passthrough resolver conflict")
+	}
+}
+
+func TestPassthroughStreamObservationHasOnlyBoundedFields(t *testing.T) {
+	allowed := map[string]struct{}{
+		"EndpointKey":    {},
+		"EventType":      {},
+		"ObservedAt":     {},
+		"Result":         {},
+		"Reason":         {},
+		"ObservationKey": {},
+	}
+	observationType := reflect.TypeOf(PassthroughStreamObservation{})
+	for i := 0; i < observationType.NumField(); i++ {
+		field := observationType.Field(i)
+		if _, ok := allowed[field.Name]; !ok {
+			t.Fatalf("unexpected observation field %q", field.Name)
+		}
+	}
+	if observationType.NumField() != len(allowed) {
+		t.Fatalf("observation fields = %d, want %d", observationType.NumField(), len(allowed))
 	}
 }
 
@@ -180,6 +241,21 @@ func TestListenerWrapperResolverOKTrueProxiesEndpoint(t *testing.T) {
 	}
 	if resolver.serverName != "home.example.com" {
 		t.Fatalf("server name = %q", resolver.serverName)
+	}
+	waitHandshakeError(t, handshakeDone)
+}
+
+func TestListenerWrapperPassthroughObserverAbsentCompatibility(t *testing.T) {
+	resolver := &recordingPassthroughResolver{endpoint: "home", ok: true, key: "route-home"}
+	wrapper := listenerWrapperWithResolver(resolver)
+	serverConn, handshakeDone := tlsClientHelloConn(t, "home.example.com")
+
+	replayConn, handled := wrapper.handleConnection(serverConn)
+	if !handled {
+		t.Fatal("expected connection to be handled by Bifrost")
+	}
+	if replayConn != nil {
+		t.Fatal("expected no replay connection")
 	}
 	waitHandshakeError(t, handshakeDone)
 }
@@ -275,11 +351,61 @@ type recordingPassthroughResolver struct {
 	ok         bool
 	err        error
 	serverName string
+	key        string
 }
 
 func (r *recordingPassthroughResolver) ResolvePassthrough(_ context.Context, serverName string) (string, bool, error) {
 	r.serverName = serverName
 	return r.endpoint, r.ok, r.err
+}
+
+func (r *recordingPassthroughResolver) ResolvePassthroughObservation(_ context.Context, serverName string) (PassthroughResolution, bool, error) {
+	r.serverName = serverName
+	return PassthroughResolution{EndpointKey: r.endpoint, ObservationKey: r.key}, r.ok, r.err
+}
+
+type recordingPassthroughStreamObserver struct {
+	mu           sync.Mutex
+	observations []PassthroughStreamObservation
+	notify       chan struct{}
+}
+
+func newRecordingPassthroughStreamObserver() *recordingPassthroughStreamObserver {
+	return &recordingPassthroughStreamObserver{notify: make(chan struct{}, 16)}
+}
+
+func (o *recordingPassthroughStreamObserver) ObservePassthroughStream(_ context.Context, observation PassthroughStreamObservation) {
+	o.mu.Lock()
+	o.observations = append(o.observations, observation)
+	o.mu.Unlock()
+	select {
+	case o.notify <- struct{}{}:
+	default:
+	}
+}
+
+func (o *recordingPassthroughStreamObserver) snapshot() []PassthroughStreamObservation {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	out := make([]PassthroughStreamObservation, len(o.observations))
+	copy(out, o.observations)
+	return out
+}
+
+func waitPassthroughObservations(t *testing.T, observer *recordingPassthroughStreamObserver, count int) []PassthroughStreamObservation {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		observations := observer.snapshot()
+		if len(observations) >= count {
+			return observations
+		}
+		select {
+		case <-observer.notify:
+		case <-deadline:
+			t.Fatalf("timed out waiting for %d observations, got %#v", count, observations)
+		}
+	}
 }
 
 func listenerWrapperWithResolver(resolver runtime.PassthroughResolver) *ListenerWrapper {
@@ -325,3 +451,4 @@ func waitHandshakeError(t *testing.T, done <-chan error) {
 }
 
 var _ PassthroughResolverModule = (*testPassthroughResolverModule)(nil)
+var _ PassthroughStreamObserverModule = (*testPassthroughStreamObserverModule)(nil)

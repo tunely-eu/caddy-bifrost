@@ -174,6 +174,13 @@ home.example.com {
 
 Listener-wrapper passthrough lets Caddy continue serving normal public-TLS routes on the same `:443` listener without creating HTTP routes or edge certificates for private TLS hostnames. The catch-all `:443 { abort }` block only keeps the listener alive when there are no public Caddy routes on that listener.
 
+Embedded builds can add a product-neutral passthrough stream observer. The
+observer receives `stream_started`, `stream_ended`, and bounded
+`stream_rejected` events with endpoint key, timestamp, controlled
+result/reason, and an opaque resolver-provided observation key. It does not
+receive SNI hostnames, route hostnames, remote addresses, HTTP data, tokens, or
+private keys.
+
 ## Security Model
 
 - The connector tunnel always uses TLS and the Bifrost ALPN value.
@@ -181,6 +188,7 @@ Listener-wrapper passthrough lets Caddy continue serving normal public-TLS route
 - Public TLS mode leaves browser-facing HTTPS, request policy, and application authentication in normal Caddy configuration.
 - Private TLS mode forwards raw TLS after SNI routing; application TLS terminates on the private Caddy instance.
 - Guardrails bound sessions, streams, bandwidth, idle time, and hello metadata.
+- Passthrough stream observer payloads are bounded metadata and do not include SNI hostnames, route hostnames, remote addresses, HTTP data, participant data, tokens, or private keys.
 - Metrics labels use endpoint keys and controlled reason/direction values only, not tokens, paths, remote addresses, or SNI names.
 
 See [Security](docs/security.md) for deployment notes and trust boundaries.

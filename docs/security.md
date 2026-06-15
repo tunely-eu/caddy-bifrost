@@ -58,6 +58,19 @@ For single-connector homelab routes, `policy replace_existing` is usually the ea
 
 Bifrost metrics exported through Caddy use endpoint keys and controlled reason/direction values only. Tokens, remote addresses, HTTP paths, and SNI names are not used as Bifrost metric labels.
 
+## Passthrough Stream Observations
+
+Embedded runtimes can install a passthrough stream observer for
+`stream_started`, `stream_ended`, and bounded `stream_rejected` events. The
+payload is limited to endpoint key, event type, timestamp, controlled
+result/reason, and an opaque resolver-provided observation key. It does not
+include SNI hostnames, route hostnames, remote addresses, HTTP data,
+participant data, tokens, token hashes, or private keys.
+
+The opaque observation key belongs to the embedding runtime. caddy-bifrost does
+not interpret it as a service, tenant, dashboard, billing, plan, or hostname
+identifier, and it should not be exported as a Prometheus label.
+
 ## Operational Checklist
 
 - Use long random endpoint tokens.

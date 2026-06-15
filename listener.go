@@ -35,9 +35,15 @@ type ListenerWrapper struct {
 	// mappings.
 	PassthroughResolverRaw json.RawMessage `json:"passthrough_resolver,omitempty" caddy:"namespace=bifrost.passthrough_resolvers inline_key=resolver"`
 
+	// PassthroughObserverRaw optionally loads a custom Caddy module from the
+	// bifrost.passthrough_stream_observers namespace. It receives bounded
+	// stream lifecycle events after a passthrough route is selected.
+	PassthroughObserverRaw json.RawMessage `json:"passthrough_observer,omitempty" caddy:"namespace=bifrost.passthrough_stream_observers inline_key=observer"`
+
 	ctx        context.Context
 	logger     *zap.Logger
 	bifrostApp *App
+	observer   PassthroughStreamObserver
 }
 
 // CaddyModule returns the module registration for the listener wrapper.
@@ -71,10 +77,23 @@ func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 	}
 	w.bifrostApp = bifrostApp
 
+	explicitObserver, err := w.loadPassthroughObserver(ctx)
+	if err != nil {
+		return err
+	}
+
 	if len(w.PassthroughResolverRaw) > 0 {
 		resolver, err := w.loadPassthroughResolver(ctx)
 		if err != nil {
 			return err
+		}
+		if explicitObserver == nil {
+			if observer, ok := resolver.(PassthroughStreamObserver); ok {
+				w.observer = observer
+			}
+		}
+		if explicitObserver != nil {
+			w.observer = explicitObserver
 		}
 		server, err := w.serverRuntime()
 		if err != nil {
@@ -94,6 +113,9 @@ func (w *ListenerWrapper) Provision(ctx caddy.Context) error {
 		server.SetPassthroughResolver(resolver)
 		w.logger.Info("installed bifrost passthrough routes", zap.Int("routes", len(w.Routes)))
 	}
+	if len(w.PassthroughResolverRaw) == 0 && explicitObserver != nil {
+		w.observer = explicitObserver
+	}
 	return nil
 }
 
@@ -110,6 +132,21 @@ func (w *ListenerWrapper) loadPassthroughResolver(ctx caddy.Context) (Passthroug
 		return nil, fmt.Errorf("bifrost passthrough resolver module has unexpected type %T", mod)
 	}
 	return resolver, nil
+}
+
+func (w *ListenerWrapper) loadPassthroughObserver(ctx caddy.Context) (PassthroughStreamObserver, error) {
+	if len(w.PassthroughObserverRaw) == 0 {
+		return nil, nil
+	}
+	mod, err := ctx.LoadModule(w, "PassthroughObserverRaw")
+	if err != nil {
+		return nil, fmt.Errorf("loading bifrost passthrough stream observer: %w", err)
+	}
+	observer, ok := mod.(PassthroughStreamObserver)
+	if !ok {
+		return nil, fmt.Errorf("bifrost passthrough stream observer module has unexpected type %T", mod)
+	}
+	return observer, nil
 }
 
 // WrapListener returns a listener that intercepts matching TLS ClientHello SNI
@@ -196,7 +233,7 @@ func (w *ListenerWrapper) handleConnection(conn net.Conn) (net.Conn, bool) {
 
 	server, err := w.serverRuntime()
 	if err != nil {
-		w.logger.Warn("bifrost passthrough server unavailable", zap.Error(err))
+		w.logger.Warn("bifrost passthrough server unavailable", zap.String("reason", string(PassthroughStreamReasonServerUnavailable)))
 		_ = replayConn.Close()
 		return nil, true
 	}
@@ -204,20 +241,35 @@ func (w *ListenerWrapper) handleConnection(conn net.Conn) (net.Conn, bool) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	endpoint, ok, err := server.ResolvePassthrough(ctx, serverName)
+	resolution, ok, err := server.ResolvePassthrough(ctx, serverName)
 	if err != nil {
-		w.logger.Warn("bifrost passthrough route resolution failed", zap.String("server_name", serverName), zap.Error(err))
+		w.logger.Warn("bifrost passthrough route resolution failed", zap.String("reason", string(PassthroughStreamReasonResolverError)))
+		w.observePassthroughRejected(ctx, runtime.PassthroughResolution{}, PassthroughStreamReasonResolverError)
 		_ = replayConn.Close()
 		return nil, true
 	}
 	if !ok {
 		return replayConn, false
 	}
+	if strings.TrimSpace(resolution.EndpointKey) == "" {
+		w.logger.Warn("bifrost passthrough route resolution returned empty endpoint")
+		w.observePassthroughRejected(ctx, resolution, PassthroughStreamReasonEmptyEndpoint)
+		_ = replayConn.Close()
+		return nil, true
+	}
 
 	go func() {
-		if err := server.ProxyStream(ctx, endpoint, replayConn); err != nil {
-			w.logger.Warn("bifrost passthrough proxy failed", zap.String("server_name", serverName), zap.String("endpoint", endpoint), zap.Error(err))
+		lifecycle := newPassthroughStreamLifecycle(ctx, w.observer, resolution)
+		observedConn := &passthroughObservedConn{Conn: replayConn, lifecycle: lifecycle}
+		if err := server.ProxyStream(ctx, resolution.EndpointKey, observedConn); err != nil {
+			reason := classifyPassthroughStreamReject(err)
+			if !lifecycle.reject(reason) {
+				lifecycle.end()
+			}
+			w.logger.Warn("bifrost passthrough proxy failed", zap.String("endpoint", resolution.EndpointKey), zap.String("reason", string(reason)))
+			return
 		}
+		lifecycle.end()
 	}()
 	return nil, true
 }

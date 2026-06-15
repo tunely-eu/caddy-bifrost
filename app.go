@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/tunely-eu/bifrost"
@@ -48,9 +49,79 @@ type PassthroughResolverModule interface {
 	PassthroughResolver
 }
 
+// PassthroughStreamObserverModule is implemented by Caddy modules that observe
+// bounded SNI passthrough stream lifecycle events.
+type PassthroughStreamObserverModule interface {
+	caddy.Module
+	PassthroughStreamObserver
+}
+
 // PassthroughResolver maps one inbound TLS SNI name to a Bifrost endpoint.
 type PassthroughResolver interface {
 	ResolvePassthrough(ctx context.Context, serverName string) (endpoint string, ok bool, err error)
+}
+
+// PassthroughResolution is a bounded passthrough route decision.
+type PassthroughResolution = runtime.PassthroughResolution
+
+// PassthroughObservationResolver is an optional extension for resolvers that
+// want to attach an opaque observation key to the route decision.
+type PassthroughObservationResolver interface {
+	ResolvePassthroughObservation(ctx context.Context, serverName string) (PassthroughResolution, bool, error)
+}
+
+// PassthroughStreamEventType is a controlled passthrough stream lifecycle event
+// name.
+type PassthroughStreamEventType string
+
+const (
+	PassthroughStreamStarted  PassthroughStreamEventType = "stream_started"
+	PassthroughStreamEnded    PassthroughStreamEventType = "stream_ended"
+	PassthroughStreamRejected PassthroughStreamEventType = "stream_rejected"
+)
+
+// PassthroughStreamResult is a controlled passthrough stream lifecycle result.
+type PassthroughStreamResult string
+
+const (
+	PassthroughStreamResultStarted  PassthroughStreamResult = "started"
+	PassthroughStreamResultEnded    PassthroughStreamResult = "ended"
+	PassthroughStreamResultRejected PassthroughStreamResult = "rejected"
+)
+
+// PassthroughStreamReason is a controlled passthrough stream lifecycle reason.
+type PassthroughStreamReason string
+
+const (
+	PassthroughStreamReasonNone              PassthroughStreamReason = "none"
+	PassthroughStreamReasonResolverError     PassthroughStreamReason = "resolver_error"
+	PassthroughStreamReasonEmptyEndpoint     PassthroughStreamReason = "empty_endpoint"
+	PassthroughStreamReasonServerUnavailable PassthroughStreamReason = "server_unavailable"
+	PassthroughStreamReasonNoSession         PassthroughStreamReason = "no_session"
+	PassthroughStreamReasonSessionNotReady   PassthroughStreamReason = "session_not_ready"
+	PassthroughStreamReasonStreamLimit       PassthroughStreamReason = "stream_limit"
+	PassthroughStreamReasonStreamOpenFailed  PassthroughStreamReason = "stream_open_failed"
+)
+
+// PassthroughStreamObservation carries bounded stream lifecycle metadata.
+//
+// It intentionally excludes SNI hostnames, route hostnames, remote addresses,
+// HTTP data, participant data, tokens, and private keys. ObservationKey is an
+// opaque value supplied by the resolver and is not interpreted by caddy-bifrost.
+type PassthroughStreamObservation struct {
+	EndpointKey    string                     `json:"endpoint_key,omitempty"`
+	EventType      PassthroughStreamEventType `json:"event_type,omitempty"`
+	ObservedAt     time.Time                  `json:"observed_at,omitempty"`
+	Result         PassthroughStreamResult    `json:"result,omitempty"`
+	Reason         PassthroughStreamReason    `json:"reason,omitempty"`
+	ObservationKey string                     `json:"observation_key,omitempty"`
+}
+
+// PassthroughStreamObserver receives bounded passthrough stream lifecycle
+// observations. Implementations should return quickly and must not treat the
+// opaque ObservationKey as a Caddy metric label.
+type PassthroughStreamObserver interface {
+	ObservePassthroughStream(ctx context.Context, observation PassthroughStreamObservation)
 }
 
 type appRuntime interface {

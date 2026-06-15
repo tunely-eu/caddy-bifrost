@@ -130,6 +130,75 @@ func TestPassthroughRecordsEndpointByteMetrics(t *testing.T) {
 	})
 }
 
+func TestPassthroughStreamObserverRecordsStartAndEnd(t *testing.T) {
+	connectorAddr := testutil.FreeTCPAddr(t)
+	passthroughAddr := testutil.FreeTCPAddr(t)
+	server, client, _, originCA, stop := startServerClient(t, connectorAddr, true)
+	defer stop()
+
+	if server == nil || client == nil {
+		t.Fatal("expected server and client")
+	}
+	stream := waitBifrostStream(t, server, "home")
+	_ = stream.Close()
+	observer := newRecordingPassthroughStreamObserver()
+	resolver := &recordingPassthroughResolver{endpoint: "home", ok: true, key: "route-home"}
+	server.SetPassthroughResolver(resolver)
+	listener, err := net.Listen("tcp", passthroughAddr)
+	if err != nil {
+		t.Fatalf("listen passthrough test listener: %v", err)
+	}
+	defer listener.Close()
+	wrapper := &ListenerWrapper{
+		App:        "bifrost",
+		ctx:        context.Background(),
+		logger:     zap.NewNop(),
+		bifrostApp: &App{runtime: server},
+		observer:   observer,
+	}
+	serveWrappedPassthroughListener(listener, wrapper)
+
+	response := testutil.WaitHTTPSResponse(t, passthroughAddr, "home.example.com", originCA)
+	assertOKResponse(t, response)
+
+	observations := waitPassthroughObservations(t, observer, 2)
+	assertPassthroughObservation(t, observations[0], PassthroughStreamStarted, PassthroughStreamResultStarted, PassthroughStreamReasonNone)
+	assertPassthroughObservation(t, observations[1], PassthroughStreamEnded, PassthroughStreamResultEnded, PassthroughStreamReasonNone)
+	if !observations[0].ObservedAt.Before(observations[1].ObservedAt) && !observations[0].ObservedAt.Equal(observations[1].ObservedAt) {
+		t.Fatalf("observations out of order: %#v", observations)
+	}
+}
+
+func TestPassthroughStreamObserverRecordsControlledReject(t *testing.T) {
+	connectorAddr := testutil.FreeTCPAddr(t)
+	server, stop := startServerOnly(t, connectorAddr)
+	defer stop()
+
+	observer := newRecordingPassthroughStreamObserver()
+	resolver := &recordingPassthroughResolver{endpoint: "home", ok: true, key: "route-home"}
+	server.SetPassthroughResolver(resolver)
+	wrapper := &ListenerWrapper{
+		App:        "bifrost",
+		ctx:        context.Background(),
+		logger:     zap.NewNop(),
+		bifrostApp: &App{runtime: server},
+		observer:   observer,
+	}
+	serverConn, handshakeDone := tlsClientHelloConn(t, "home.example.com")
+
+	replayConn, handled := wrapper.handleConnection(serverConn)
+	if !handled {
+		t.Fatal("expected connection to be handled by Bifrost")
+	}
+	if replayConn != nil {
+		t.Fatal("expected no replay connection")
+	}
+
+	observations := waitPassthroughObservations(t, observer, 1)
+	assertPassthroughObservation(t, observations[0], PassthroughStreamRejected, PassthroughStreamResultRejected, PassthroughStreamReasonNoSession)
+	waitHandshakeError(t, handshakeDone)
+}
+
 func TestServerClientUsesInjectedAcceptProvider(t *testing.T) {
 	connectorAddr := testutil.FreeTCPAddr(t)
 	originAddr, stopOrigin := testutil.StartHTTPOrigin(t)
@@ -358,6 +427,75 @@ func startServerClient(t *testing.T, connectorAddr string, originTLS bool, optio
 		stopOrigin()
 	}
 	return server, client, transport, originCA, stop
+}
+
+func startServerOnly(t *testing.T, connectorAddr string, options ...runtime.ServerOption) (*runtime.Server, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	bifrostCert, bifrostKey, _ := testutil.WriteTestCertFiles(t, dir, "localhost")
+	bifrostKeyPair, err := tls.LoadX509KeyPair(bifrostCert, bifrostKey)
+	if err != nil {
+		t.Fatalf("load bifrost cert: %v", err)
+	}
+	serverConfig := &config.Server{
+		Connector: config.Connector{
+			Listen:     connectorAddr,
+			TLSSubject: "localhost",
+			Endpoints: []config.Endpoint{
+				{
+					Key:    "home",
+					Token:  "secret",
+					Policy: "replace_existing",
+					Limits: config.EndpointLimits{MaxStreams: 10},
+				},
+			},
+		},
+	}
+	server, err := runtime.NewServerWithTLSConfig(serverConfig, &tls.Config{Certificates: []tls.Certificate{bifrostKeyPair}}, zap.NewNop(), options...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatalf("server start: %v", err)
+	}
+	return server, func() {
+		_ = server.Stop()
+	}
+}
+
+func serveWrappedPassthroughListener(listener net.Listener, wrapper *ListenerWrapper) {
+	wrapped := wrapper.WrapListener(listener)
+	go func() {
+		for {
+			conn, err := wrapped.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+}
+
+func assertPassthroughObservation(t *testing.T, observation PassthroughStreamObservation, event PassthroughStreamEventType, result PassthroughStreamResult, reason PassthroughStreamReason) {
+	t.Helper()
+	if observation.EndpointKey != "home" {
+		t.Fatalf("endpoint key = %q", observation.EndpointKey)
+	}
+	if observation.ObservationKey != "route-home" {
+		t.Fatalf("observation key = %q", observation.ObservationKey)
+	}
+	if observation.EventType != event {
+		t.Fatalf("event type = %q, want %q", observation.EventType, event)
+	}
+	if observation.Result != result {
+		t.Fatalf("result = %q, want %q", observation.Result, result)
+	}
+	if observation.Reason != reason {
+		t.Fatalf("reason = %q, want %q", observation.Reason, reason)
+	}
+	if observation.ObservedAt.IsZero() {
+		t.Fatal("observed_at is zero")
+	}
 }
 
 func caddyLifecycleConfig(t *testing.T, connectorAddr, httpsAddr, storageDir string, routes ...string) []byte {

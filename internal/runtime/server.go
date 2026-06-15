@@ -40,6 +40,18 @@ type PassthroughResolver interface {
 	ResolvePassthrough(ctx context.Context, serverName string) (endpoint string, ok bool, err error)
 }
 
+// PassthroughResolution is a bounded passthrough route decision.
+type PassthroughResolution struct {
+	EndpointKey    string
+	ObservationKey string
+}
+
+// PassthroughObservationResolver is an optional extension for resolvers that
+// attach an opaque observation key to the route decision.
+type PassthroughObservationResolver interface {
+	ResolvePassthroughObservation(ctx context.Context, serverName string) (PassthroughResolution, bool, error)
+}
+
 type ServerOptions struct {
 	AcceptProvider bifrost.AcceptProvider
 	Observer       bifrost.Observer
@@ -77,6 +89,14 @@ func (r *StaticPassthroughResolver) ResolvePassthrough(_ context.Context, server
 	}
 	endpoint, ok := r.routes.Resolve(serverName)
 	return endpoint, ok, nil
+}
+
+func (r *StaticPassthroughResolver) ResolvePassthroughObservation(ctx context.Context, serverName string) (PassthroughResolution, bool, error) {
+	endpoint, ok, err := r.ResolvePassthrough(ctx, serverName)
+	if err != nil || !ok {
+		return PassthroughResolution{}, ok, err
+	}
+	return PassthroughResolution{EndpointKey: endpoint}, true, nil
 }
 
 func NewServer(ctx caddy.Context, cfg *config.Server, logger *zap.Logger, options ...ServerOption) (*Server, error) {
@@ -280,15 +300,22 @@ func (s *Server) SetPassthroughResolver(resolver PassthroughResolver) {
 	s.resolver = resolver
 }
 
-func (s *Server) ResolvePassthrough(ctx context.Context, serverName string) (string, bool, error) {
+func (s *Server) ResolvePassthrough(ctx context.Context, serverName string) (PassthroughResolution, bool, error) {
 	if s == nil {
-		return "", false, fmt.Errorf("bifrost server runtime is not configured")
+		return PassthroughResolution{}, false, fmt.Errorf("bifrost server runtime is not configured")
 	}
 	s.resolverMu.RLock()
 	resolver := s.resolver
 	s.resolverMu.RUnlock()
 	if resolver == nil {
-		return "", false, nil
+		return PassthroughResolution{}, false, nil
 	}
-	return resolver.ResolvePassthrough(ctx, serverName)
+	if observationResolver, ok := resolver.(PassthroughObservationResolver); ok {
+		return observationResolver.ResolvePassthroughObservation(ctx, serverName)
+	}
+	endpoint, ok, err := resolver.ResolvePassthrough(ctx, serverName)
+	if err != nil || !ok {
+		return PassthroughResolution{}, ok, err
+	}
+	return PassthroughResolution{EndpointKey: endpoint}, true, nil
 }

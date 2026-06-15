@@ -231,3 +231,38 @@ ResolvePassthrough(context.Context, string) (endpoint string, ok bool, err error
 ```
 
 through the `bifrost.passthrough_resolvers` namespace. Static `route_sni` mappings and `passthrough_resolver` are mutually exclusive. Resolver implementations own any caching or control-plane lookup behavior.
+
+Resolvers that need route-attributed stream observations can instead implement
+the optional extended method:
+
+```go
+ResolvePassthroughObservation(context.Context, string) (caddybifrost.PassthroughResolution, bool, error)
+```
+
+`PassthroughResolution.EndpointKey` selects the Bifrost endpoint.
+`PassthroughResolution.ObservationKey` is an opaque resolver-owned key carried
+unchanged to the stream observer. caddy-bifrost does not interpret it as a
+tenant, service, hostname, dashboard, billing, or plan concept.
+
+Embedded builds can observe selected passthrough stream lifecycle events with a
+custom module implementing:
+
+```go
+ObservePassthroughStream(context.Context, caddybifrost.PassthroughStreamObservation)
+```
+
+through the `bifrost.passthrough_stream_observers` namespace, or by having the
+passthrough resolver module implement the observer interface too. Observations
+are bounded to:
+
+- `endpoint_key`
+- `event_type`: `stream_started`, `stream_ended`, or `stream_rejected`
+- `observed_at`
+- controlled `result` and `reason`
+- opaque `observation_key`
+
+The observer payload intentionally excludes SNI hostnames, route hostnames,
+remote addresses, HTTP paths, HTTP headers, cookies, bodies, content types,
+participant data, tokens, token hashes, and private keys. Observation keys are
+not Prometheus labels and should stay in the embedding runtime's own bounded
+state.
