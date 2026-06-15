@@ -25,6 +25,7 @@ type Server struct {
 	tlsConfig  *tls.Config
 	accept     bifrost.AcceptProvider
 	observer   bifrost.Observer
+	latency    bifrost.PassiveLatencyObserver
 	resolverMu sync.RWMutex
 	resolver   PassthroughResolver
 
@@ -53,8 +54,9 @@ type PassthroughObservationResolver interface {
 }
 
 type ServerOptions struct {
-	AcceptProvider bifrost.AcceptProvider
-	Observer       bifrost.Observer
+	AcceptProvider         bifrost.AcceptProvider
+	Observer               bifrost.Observer
+	PassiveLatencyObserver bifrost.PassiveLatencyObserver
 }
 
 type ServerOption func(*ServerOptions)
@@ -68,6 +70,12 @@ func WithAcceptProvider(provider bifrost.AcceptProvider) ServerOption {
 func WithObserver(observer bifrost.Observer) ServerOption {
 	return func(opts *ServerOptions) {
 		opts.Observer = observer
+	}
+}
+
+func WithPassiveLatencyObserver(observer bifrost.PassiveLatencyObserver) ServerOption {
+	return func(opts *ServerOptions) {
+		opts.PassiveLatencyObserver = observer
 	}
 }
 
@@ -141,6 +149,7 @@ func NewServerWithTLSConfig(cfg *config.Server, tlsConfig *tls.Config, logger *z
 		tlsConfig: tlsConfig,
 		accept:    acceptProvider,
 		observer:  opts.Observer,
+		latency:   opts.PassiveLatencyObserver,
 	}, nil
 }
 
@@ -215,10 +224,11 @@ func (s *Server) Start() error {
 		Guardrails: s.cfg.Guardrails.BifrostGuardrails(),
 		Runtime:    s.cfg.Runtime.BifrostRuntime(),
 	}, bifrost.ServerOptions{
-		AcceptProvider: s.accept,
-		Observer:       s.observer,
-		Listener:       connectorListener,
-		Logger:         logging.Slog(s.logger.Named("bifrost")),
+		AcceptProvider:         s.accept,
+		Observer:               s.observer,
+		PassiveLatencyObserver: s.latency,
+		Listener:               connectorListener,
+		Logger:                 logging.Slog(s.logger.Named("bifrost")),
 		Ready: func(addr net.Addr) {
 			select {
 			case ready <- addr:
@@ -289,6 +299,24 @@ func (s *Server) ProxyStream(ctx context.Context, endpoint string, conn net.Conn
 		return fmt.Errorf("bifrost server is not running")
 	}
 	return s.server.ProxyStream(ctx, endpoint, conn)
+}
+
+func (s *Server) PassiveLatencyObservation(endpointKey string, now time.Time) bifrost.PassiveLatencyObservation {
+	endpointKey = strings.TrimSpace(endpointKey)
+	if s == nil || s.server == nil {
+		return bifrost.PassiveLatencyObservation{
+			EndpointKey: endpointKey,
+			State:       bifrost.PassiveLatencyUnknown,
+		}
+	}
+	return s.server.PassiveLatencyObservation(endpointKey, now)
+}
+
+func (s *Server) PassiveLatencySnapshot(now time.Time) []bifrost.PassiveLatencyObservation {
+	if s == nil || s.server == nil {
+		return nil
+	}
+	return s.server.PassiveLatencySnapshot(now)
 }
 
 func (s *Server) SetPassthroughResolver(resolver PassthroughResolver) {

@@ -31,6 +31,12 @@ type App struct {
 	// runtime and replaces static endpoint token config.
 	AcceptProviderRaw json.RawMessage `json:"accept_provider,omitempty" caddy:"namespace=bifrost.accept_providers inline_key=provider"`
 
+	// PassiveLatencyObserverRaw optionally loads a custom Caddy module from the
+	// bifrost.passive_latency_observers namespace. It is only valid with the
+	// server runtime and receives bounded endpoint-keyed passive latency
+	// observations.
+	PassiveLatencyObserverRaw json.RawMessage `json:"passive_latency_observer,omitempty" caddy:"namespace=bifrost.passive_latency_observers inline_key=observer"`
+
 	logger  *zap.Logger
 	runtime appRuntime
 }
@@ -148,6 +154,9 @@ func (a *App) Provision(ctx caddy.Context) error {
 	if runtimeName != "server" && len(a.AcceptProviderRaw) > 0 {
 		return fmt.Errorf("bifrost accept_provider requires server runtime")
 	}
+	if runtimeName != "server" && len(a.PassiveLatencyObserverRaw) > 0 {
+		return fmt.Errorf("bifrost passive_latency_observer requires server runtime")
+	}
 	observer, err := runtime.NewCaddyObserver(ctx.GetMetricsRegistry())
 	if err != nil {
 		return err
@@ -158,9 +167,16 @@ func (a *App) Provision(ctx caddy.Context) error {
 		if err != nil {
 			return err
 		}
+		passiveLatencyObserver, err := a.loadPassiveLatencyObserver(ctx)
+		if err != nil {
+			return err
+		}
 		var options []runtime.ServerOption
 		if acceptProvider != nil {
 			options = append(options, runtime.WithAcceptProvider(acceptProvider))
+		}
+		if passiveLatencyObserver != nil {
+			options = append(options, runtime.WithPassiveLatencyObserver(newPassiveLatencyObserverAdapter(ctx.Context, passiveLatencyObserver)))
 		}
 		options = append(options, runtime.WithObserver(observer))
 		server, err := runtime.NewServer(ctx, a.Server, a.logger.Named("server"), options...)

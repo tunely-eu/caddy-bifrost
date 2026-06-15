@@ -71,6 +71,23 @@ The opaque observation key belongs to the embedding runtime. caddy-bifrost does
 not interpret it as a service, tenant, dashboard, billing, plan, or hostname
 identifier, and it should not be exported as a Prometheus label.
 
+## Passive Latency Observations
+
+The Bifrost server app exposes endpoint-keyed passive latency to embedding
+Caddy modules as bounded tunnel/session metadata. The payload is limited to
+endpoint key, latency milliseconds, observation time, and controlled state
+(`ok`, `unknown`, or `stale`).
+
+Passive latency is derived by Bifrost from tunnel control traffic. It is not a
+published application response time, active probe, connection test, Diagnose
+result, or HTTP measurement.
+
+The passive latency bridge does not include SNI hostnames, route hostnames,
+remote addresses, HTTP paths, HTTP headers, cookies, bodies, content types,
+participant data, tokens, token hashes, or private keys. It also does not add
+passive latency Prometheus samples; embedders that export observations through
+their own status surfaces must keep labels low-cardinality and secret-free.
+
 ## Operational Checklist
 
 - Use long random endpoint tokens.

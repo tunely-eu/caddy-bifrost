@@ -193,6 +193,52 @@ bifrost_endpoint_active_sessions
 
 Metrics labels use stable endpoint keys and controlled reason/direction values. Tokens, remote addresses, HTTP paths, and SNI hostnames are not exported as Bifrost metric labels.
 
+## Passive Latency Bridge
+
+The server app exposes Bifrost's endpoint-keyed passive latency state to
+embedding Caddy modules through the public `caddy-bifrost` package:
+
+```go
+type PassiveLatencySnapshotter interface {
+	PassiveLatencyObservation(endpointKey string, now time.Time) caddybifrost.PassiveLatencyObservation
+	PassiveLatencySnapshot(now time.Time) []caddybifrost.PassiveLatencyObservation
+}
+```
+
+An embedding module can resolve the configured Bifrost app with `ctx.App` and
+type-assert it to `caddybifrost.PassiveLatencySnapshotter`. The snapshotter
+returns `unknown` for a missing endpoint observation and an empty snapshot when
+the server runtime is unavailable or no endpoint has been observed.
+
+The observation payload is bounded to:
+
+- `endpoint_key`
+- `latency_ms`
+- `observed_at`
+- controlled `state`: `ok`, `unknown`, or `stale`
+
+`latency_ms` and `observed_at` are present only when an observation exists.
+Consumers must treat `unknown` as absence of evidence, not as zero latency.
+`stale` means the latest passive observation exists but is older than Bifrost's
+freshness window.
+
+Embedded builds can also configure a custom module implementing:
+
+```go
+ObservePassiveLatency(context.Context, caddybifrost.PassiveLatencyObservation)
+```
+
+through the `bifrost.passive_latency_observers` namespace in JSON
+configuration. Observer callbacks receive fresh passive Bifrost session/mux
+control observations only; they are not active probes and are not HTTP or
+application latency measurements.
+
+Passive latency observations intentionally exclude SNI hostnames, route
+hostnames, remote addresses, HTTP paths, HTTP headers, cookies, bodies, content
+types, participant data, tokens, token hashes, and private keys. The bridge does
+not export passive latency as Prometheus samples; embedders that publish the
+data elsewhere must keep labels low-cardinality and secret-free.
+
 ## Dynamic Accept Providers
 
 Standalone Caddyfile config uses static `endpoint` blocks for tunnel admission. Embedded builds can provide a custom module implementing `bifrost.AcceptProvider` through the `bifrost.accept_providers` namespace, or use the runtime `WithAcceptProvider` option directly.

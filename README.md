@@ -34,6 +34,7 @@ Many self-hosters and small teams already trust Caddy as their public reverse pr
 | Private TLS mode | Public Caddy routes by ClientHello SNI and forwards raw TLS to private Caddy. |
 | Endpoint ownership policy | Reconnect behavior is explicit: reject, replace, or allow parallel sessions. |
 | Guardrails and metrics | Bifrost limits and Prometheus metrics are exposed through Caddy's runtime. |
+| Passive latency bridge | Embedding Caddy modules can snapshot endpoint-keyed tunnel/session latency with `ok`, `unknown`, and `stale` state. |
 | Product-agnostic core | The module embeds [`bifrost`](https://github.com/tunely-eu/bifrost) and stays independent of hosted control planes while exposing generic admission and passthrough resolver hooks. |
 
 ## Modes
@@ -181,6 +182,12 @@ result/reason, and an opaque resolver-provided observation key. It does not
 receive SNI hostnames, route hostnames, remote addresses, HTTP data, tokens, or
 private keys.
 
+Embedding Caddy modules can also consume endpoint-keyed passive tunnel latency
+from the Bifrost app. The bridge exposes only `endpoint_key`, `latency_ms`,
+`observed_at`, and controlled state (`ok`, `unknown`, or `stale`). It is based
+on Bifrost tunnel/session control observations, not HTTP application latency,
+active probes, connection tests, or Diagnose behavior.
+
 ## Security Model
 
 - The connector tunnel always uses TLS and the Bifrost ALPN value.
@@ -189,6 +196,7 @@ private keys.
 - Private TLS mode forwards raw TLS after SNI routing; application TLS terminates on the private Caddy instance.
 - Guardrails bound sessions, streams, bandwidth, idle time, and hello metadata.
 - Passthrough stream observer payloads are bounded metadata and do not include SNI hostnames, route hostnames, remote addresses, HTTP data, participant data, tokens, or private keys.
+- Passive latency observations are bounded endpoint metadata and do not include SNI hostnames, route hostnames, remote addresses, HTTP data, participant data, tokens, or private keys.
 - Metrics labels use endpoint keys and controlled reason/direction values only, not tokens, paths, remote addresses, or SNI names.
 
 See [Security](docs/security.md) for deployment notes and trust boundaries.

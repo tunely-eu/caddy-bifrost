@@ -359,6 +359,8 @@ github.com/tunely-eu/bifrost v0.3.0 h1:kRl/4K+OdHtxi8/JhvO2e2ohcJmkLQEfvYvVFvzsD
 github.com/tunely-eu/bifrost v0.3.0/go.mod h1:5RIz9kZUjbipghl2n1qHKUQmzK/gZye0HdFblB/8PVA=
 github.com/tunely-eu/bifrost v0.3.1 h1:XLah8YhZGtajxK2fhfQB38BMKu+9LYCLgOUo6oerW+s=
 github.com/tunely-eu/bifrost v0.3.1/go.mod h1:5RIz9kZUjbipghl2n1qHKUQmzK/gZye0HdFblB/8PVA=
+github.com/tunely-eu/bifrost v0.4.0 h1:kQ13x0OGG2Wgo5V8zi8j+DEg0tW6wpjPBJwYH+vcp0Y=
+github.com/tunely-eu/bifrost v0.4.0/go.mod h1:5RIz9kZUjbipghl2n1qHKUQmzK/gZye0HdFblB/8PVA=
 github.com/ugorji/go/codec v0.0.0-20181204163529-d75b2dcb6bc8/go.mod h1:VFNgLljTbGfSG7qAOspJ7OScBnGdDN/yBr0sguwnwf0=
 github.com/urfave/cli v1.22.17 h1:SYzXoiPfQjHBbkYxbew5prZHS1TOLT3ierW8SYLqtVQ=
 github.com/urfave/cli v1.22.17/go.mod h1:b0ht0aqgH/6pBYzzxURyrM4xXNgsoT/n2ZzwQiEhNVo=
