@@ -61,11 +61,12 @@ Bifrost metrics exported through Caddy use endpoint keys and controlled reason/d
 ## Passthrough Stream Observations
 
 Embedded runtimes can install a passthrough stream observer for
-`stream_started`, `stream_ended`, and bounded `stream_rejected` events. The
-payload is limited to endpoint key, event type, timestamp, controlled
-result/reason, and an opaque resolver-provided observation key. It does not
-include SNI hostnames, route hostnames, remote addresses, HTTP data,
-participant data, tokens, token hashes, or private keys.
+`stream_started`, `stream_usage_delta`, `stream_ended`, and bounded
+`stream_rejected` events. The payload is limited to endpoint key, event type,
+timestamp, controlled result/reason, an opaque resolver-provided observation
+key, and byte deltas for the two stream directions. It does not include SNI
+hostnames, route hostnames, remote addresses, HTTP data, participant data,
+tokens, token hashes, or private keys.
 
 The opaque observation key belongs to the embedding runtime. caddy-bifrost does
 not interpret it as a service, tenant, dashboard, billing, plan, or hostname

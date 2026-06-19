@@ -15,6 +15,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/tunely-eu/bifrost"
 	"go.uber.org/zap"
 
 	"github.com/tunely-eu/caddy-bifrost/internal/config"
@@ -189,12 +190,14 @@ func TestListenerWrapperRejectsRoutesWithPassthroughResolver(t *testing.T) {
 
 func TestPassthroughStreamObservationHasOnlyBoundedFields(t *testing.T) {
 	allowed := map[string]struct{}{
-		"EndpointKey":    {},
-		"EventType":      {},
-		"ObservedAt":     {},
-		"Result":         {},
-		"Reason":         {},
-		"ObservationKey": {},
+		"EndpointKey":            {},
+		"EventType":              {},
+		"ObservedAt":             {},
+		"Result":                 {},
+		"Reason":                 {},
+		"ObservationKey":         {},
+		"BytesIngressToEndpoint": {},
+		"BytesEndpointToIngress": {},
 	}
 	observationType := reflect.TypeOf(PassthroughStreamObservation{})
 	for i := 0; i < observationType.NumField(); i++ {
@@ -206,6 +209,24 @@ func TestPassthroughStreamObservationHasOnlyBoundedFields(t *testing.T) {
 	if observationType.NumField() != len(allowed) {
 		t.Fatalf("observation fields = %d, want %d", observationType.NumField(), len(allowed))
 	}
+}
+
+func TestPassthroughStreamLifecycleRecordsUsageDeltas(t *testing.T) {
+	observer := newRecordingPassthroughStreamObserver()
+	lifecycle := newPassthroughStreamLifecycle(context.Background(), observer, runtime.PassthroughResolution{
+		EndpointKey:    "home",
+		ObservationKey: "route-home",
+	})
+
+	lifecycle.AddBytes(bifrost.DirectionIngressToEndpoint, 11)
+	lifecycle.AddBytes(bifrost.DirectionEndpointToIngress, 22)
+	lifecycle.End()
+
+	observations := waitPassthroughObservations(t, observer, 4)
+	assertPassthroughObservation(t, observations[0], PassthroughStreamStarted, PassthroughStreamResultStarted, PassthroughStreamReasonNone)
+	assertPassthroughUsageDelta(t, observations[1], 11, 0)
+	assertPassthroughUsageDelta(t, observations[2], 0, 22)
+	assertPassthroughObservation(t, observations[3], PassthroughStreamEnded, PassthroughStreamResultEnded, PassthroughStreamReasonNone)
 }
 
 func TestListenerWrapperResolverOKFalseReplaysToCaddy(t *testing.T) {
@@ -404,6 +425,24 @@ func waitPassthroughObservations(t *testing.T, observer *recordingPassthroughStr
 		case <-observer.notify:
 		case <-deadline:
 			t.Fatalf("timed out waiting for %d observations, got %#v", count, observations)
+		}
+	}
+}
+
+func waitPassthroughObservationEvent(t *testing.T, observer *recordingPassthroughStreamObserver, event PassthroughStreamEventType) []PassthroughStreamObservation {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		observations := observer.snapshot()
+		for _, observation := range observations {
+			if observation.EventType == event {
+				return observations
+			}
+		}
+		select {
+		case <-observer.notify:
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s observation, got %#v", event, observations)
 		}
 	}
 }

@@ -2,11 +2,11 @@ package caddybifrost
 
 import (
 	"context"
-	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tunely-eu/bifrost"
 	"github.com/tunely-eu/caddy-bifrost/internal/runtime"
 )
 
@@ -66,6 +66,51 @@ func (l *passthroughStreamLifecycle) markStarted() (PassthroughStreamObservation
 	return l.observation(PassthroughStreamStarted, PassthroughStreamResultStarted, PassthroughStreamReasonNone), true
 }
 
+func (l *passthroughStreamLifecycle) AddBytes(direction bifrost.Direction, n int64) {
+	if l == nil || n <= 0 {
+		return
+	}
+	var ingressToEndpoint int64
+	var endpointToIngress int64
+	switch direction {
+	case bifrost.DirectionIngressToEndpoint:
+		ingressToEndpoint = n
+	case bifrost.DirectionEndpointToIngress:
+		endpointToIngress = n
+	default:
+		return
+	}
+	for _, observation := range l.markUsageDelta(ingressToEndpoint, endpointToIngress) {
+		l.observer.ObservePassthroughStream(l.ctx, observation)
+	}
+}
+
+func (l *passthroughStreamLifecycle) End() {
+	l.end()
+}
+
+func (l *passthroughStreamLifecycle) markUsageDelta(ingressToEndpoint int64, endpointToIngress int64) []PassthroughStreamObservation {
+	if l == nil || (ingressToEndpoint <= 0 && endpointToIngress <= 0) {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.observer == nil || l.ended {
+		return nil
+	}
+	observedAt := time.Now().UTC()
+	observations := make([]PassthroughStreamObservation, 0, 2)
+	if !l.started {
+		l.started = true
+		observations = append(observations, l.observationAt(PassthroughStreamStarted, PassthroughStreamResultStarted, PassthroughStreamReasonNone, observedAt))
+	}
+	usage := l.observationAt(PassthroughStreamUsageDelta, "", PassthroughStreamReasonNone, observedAt)
+	usage.BytesIngressToEndpoint = ingressToEndpoint
+	usage.BytesEndpointToIngress = endpointToIngress
+	observations = append(observations, usage)
+	return observations
+}
+
 func (l *passthroughStreamLifecycle) markEnded() (PassthroughStreamObservation, bool) {
 	if l == nil {
 		return PassthroughStreamObservation{}, false
@@ -96,36 +141,21 @@ func (l *passthroughStreamLifecycle) markRejected(reason PassthroughStreamReason
 }
 
 func (l *passthroughStreamLifecycle) observation(event PassthroughStreamEventType, result PassthroughStreamResult, reason PassthroughStreamReason) PassthroughStreamObservation {
+	return l.observationAt(event, result, reason, time.Now().UTC())
+}
+
+func (l *passthroughStreamLifecycle) observationAt(event PassthroughStreamEventType, result PassthroughStreamResult, reason PassthroughStreamReason, observedAt time.Time) PassthroughStreamObservation {
 	return PassthroughStreamObservation{
 		EndpointKey:    l.resolution.EndpointKey,
 		EventType:      event,
-		ObservedAt:     time.Now().UTC(),
+		ObservedAt:     observedAt,
 		Result:         result,
 		Reason:         reason,
 		ObservationKey: l.resolution.ObservationKey,
 	}
 }
 
-type passthroughObservedConn struct {
-	net.Conn
-	lifecycle *passthroughStreamLifecycle
-}
-
-func (c *passthroughObservedConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	if n > 0 && c.lifecycle != nil {
-		c.lifecycle.start()
-	}
-	return n, err
-}
-
-func (c *passthroughObservedConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	if n > 0 && c.lifecycle != nil {
-		c.lifecycle.start()
-	}
-	return n, err
-}
+var _ bifrost.StreamObserver = (*passthroughStreamLifecycle)(nil)
 
 func (w *ListenerWrapper) observePassthroughRejected(ctx context.Context, resolution runtime.PassthroughResolution, reason PassthroughStreamReason) {
 	lifecycle := newPassthroughStreamLifecycle(ctx, w.observer, resolution)

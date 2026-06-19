@@ -161,9 +161,22 @@ func TestPassthroughStreamObserverRecordsStartAndEnd(t *testing.T) {
 	response := testutil.WaitHTTPSResponse(t, passthroughAddr, "home.example.com", originCA)
 	assertOKResponse(t, response)
 
-	observations := waitPassthroughObservations(t, observer, 2)
+	observations := waitPassthroughObservationEvent(t, observer, PassthroughStreamEnded)
 	assertPassthroughObservation(t, observations[0], PassthroughStreamStarted, PassthroughStreamResultStarted, PassthroughStreamReasonNone)
-	assertPassthroughObservation(t, observations[1], PassthroughStreamEnded, PassthroughStreamResultEnded, PassthroughStreamReasonNone)
+	if len(observations) < 3 {
+		t.Fatalf("expected usage delta between start and end, got %#v", observations)
+	}
+	var usageBytes int64
+	for _, observation := range observations[1 : len(observations)-1] {
+		if observation.EventType != PassthroughStreamUsageDelta {
+			t.Fatalf("unexpected middle observation = %#v", observation)
+		}
+		usageBytes += observation.BytesIngressToEndpoint + observation.BytesEndpointToIngress
+	}
+	if usageBytes <= 0 {
+		t.Fatalf("expected positive usage delta bytes, got %#v", observations)
+	}
+	assertPassthroughObservation(t, observations[len(observations)-1], PassthroughStreamEnded, PassthroughStreamResultEnded, PassthroughStreamReasonNone)
 	if !observations[0].ObservedAt.Before(observations[1].ObservedAt) && !observations[0].ObservedAt.Equal(observations[1].ObservedAt) {
 		t.Fatalf("observations out of order: %#v", observations)
 	}
@@ -495,6 +508,17 @@ func assertPassthroughObservation(t *testing.T, observation PassthroughStreamObs
 	}
 	if observation.ObservedAt.IsZero() {
 		t.Fatal("observed_at is zero")
+	}
+}
+
+func assertPassthroughUsageDelta(t *testing.T, observation PassthroughStreamObservation, ingressToEndpoint int64, endpointToIngress int64) {
+	t.Helper()
+	assertPassthroughObservation(t, observation, PassthroughStreamUsageDelta, "", PassthroughStreamReasonNone)
+	if observation.BytesIngressToEndpoint != ingressToEndpoint {
+		t.Fatalf("bytes_ingress_to_endpoint = %d, want %d", observation.BytesIngressToEndpoint, ingressToEndpoint)
+	}
+	if observation.BytesEndpointToIngress != endpointToIngress {
+		t.Fatalf("bytes_endpoint_to_ingress = %d, want %d", observation.BytesEndpointToIngress, endpointToIngress)
 	}
 }
 

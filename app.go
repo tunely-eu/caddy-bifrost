@@ -81,9 +81,10 @@ type PassthroughObservationResolver interface {
 type PassthroughStreamEventType string
 
 const (
-	PassthroughStreamStarted  PassthroughStreamEventType = "stream_started"
-	PassthroughStreamEnded    PassthroughStreamEventType = "stream_ended"
-	PassthroughStreamRejected PassthroughStreamEventType = "stream_rejected"
+	PassthroughStreamStarted    PassthroughStreamEventType = "stream_started"
+	PassthroughStreamEnded      PassthroughStreamEventType = "stream_ended"
+	PassthroughStreamRejected   PassthroughStreamEventType = "stream_rejected"
+	PassthroughStreamUsageDelta PassthroughStreamEventType = "stream_usage_delta"
 )
 
 // PassthroughStreamResult is a controlled passthrough stream lifecycle result.
@@ -115,12 +116,14 @@ const (
 // HTTP data, participant data, tokens, and private keys. ObservationKey is an
 // opaque value supplied by the resolver and is not interpreted by caddy-bifrost.
 type PassthroughStreamObservation struct {
-	EndpointKey    string                     `json:"endpoint_key,omitempty"`
-	EventType      PassthroughStreamEventType `json:"event_type,omitempty"`
-	ObservedAt     time.Time                  `json:"observed_at,omitempty"`
-	Result         PassthroughStreamResult    `json:"result,omitempty"`
-	Reason         PassthroughStreamReason    `json:"reason,omitempty"`
-	ObservationKey string                     `json:"observation_key,omitempty"`
+	EndpointKey            string                     `json:"endpoint_key,omitempty"`
+	EventType              PassthroughStreamEventType `json:"event_type,omitempty"`
+	ObservedAt             time.Time                  `json:"observed_at,omitempty"`
+	Result                 PassthroughStreamResult    `json:"result,omitempty"`
+	Reason                 PassthroughStreamReason    `json:"reason,omitempty"`
+	ObservationKey         string                     `json:"observation_key,omitempty"`
+	BytesIngressToEndpoint int64                      `json:"bytes_ingress_to_endpoint,omitempty"`
+	BytesEndpointToIngress int64                      `json:"bytes_endpoint_to_ingress,omitempty"`
 }
 
 // PassthroughStreamObserver receives bounded passthrough stream lifecycle

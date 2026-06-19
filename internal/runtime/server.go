@@ -301,6 +301,16 @@ func (s *Server) ProxyStream(ctx context.Context, endpoint string, conn net.Conn
 	return s.server.ProxyStream(ctx, endpoint, conn)
 }
 
+func (s *Server) ProxyStreamWithObserver(ctx context.Context, endpoint string, conn net.Conn, observer bifrost.StreamObserver) error {
+	if s == nil || s.server == nil {
+		_ = conn.Close()
+		return fmt.Errorf("bifrost server is not running")
+	}
+	return s.server.ProxyStreamWithOptions(ctx, endpoint, conn, bifrost.ProxyStreamOptions{
+		Observer: observer,
+	})
+}
+
 func (s *Server) PassiveLatencyObservation(endpointKey string, now time.Time) bifrost.PassiveLatencyObservation {
 	endpointKey = strings.TrimSpace(endpointKey)
 	if s == nil || s.server == nil {

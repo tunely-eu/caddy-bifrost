@@ -176,11 +176,11 @@ home.example.com {
 Listener-wrapper passthrough lets Caddy continue serving normal public-TLS routes on the same `:443` listener without creating HTTP routes or edge certificates for private TLS hostnames. The catch-all `:443 { abort }` block only keeps the listener alive when there are no public Caddy routes on that listener.
 
 Embedded builds can add a product-neutral passthrough stream observer. The
-observer receives `stream_started`, `stream_ended`, and bounded
-`stream_rejected` events with endpoint key, timestamp, controlled
-result/reason, and an opaque resolver-provided observation key. It does not
-receive SNI hostnames, route hostnames, remote addresses, HTTP data, tokens, or
-private keys.
+observer receives `stream_started`, `stream_usage_delta`, `stream_ended`, and
+bounded `stream_rejected` events with endpoint key, timestamp, controlled
+result/reason, an opaque resolver-provided observation key, and byte deltas for
+the two stream directions. It does not receive SNI hostnames, route hostnames,
+remote addresses, HTTP data, tokens, or private keys.
 
 Embedding Caddy modules can also consume endpoint-keyed passive tunnel latency
 from the Bifrost app. The bridge exposes only `endpoint_key`, `latency_ms`,

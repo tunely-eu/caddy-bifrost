@@ -290,8 +290,8 @@ ResolvePassthroughObservation(context.Context, string) (caddybifrost.Passthrough
 unchanged to the stream observer. caddy-bifrost does not interpret it as a
 tenant, service, hostname, dashboard, billing, or plan concept.
 
-Embedded builds can observe selected passthrough stream lifecycle events with a
-custom module implementing:
+Embedded builds can observe selected passthrough stream lifecycle and byte
+delta events with a custom module implementing:
 
 ```go
 ObservePassthroughStream(context.Context, caddybifrost.PassthroughStreamObservation)
@@ -302,10 +302,13 @@ passthrough resolver module implement the observer interface too. Observations
 are bounded to:
 
 - `endpoint_key`
-- `event_type`: `stream_started`, `stream_ended`, or `stream_rejected`
+- `event_type`: `stream_started`, `stream_usage_delta`, `stream_ended`, or
+  `stream_rejected`
 - `observed_at`
 - controlled `result` and `reason`
 - opaque `observation_key`
+- byte deltas for `stream_usage_delta`: `bytes_ingress_to_endpoint` and
+  `bytes_endpoint_to_ingress`
 
 The observer payload intentionally excludes SNI hostnames, route hostnames,
 remote addresses, HTTP paths, HTTP headers, cookies, bodies, content types,

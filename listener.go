@@ -260,8 +260,7 @@ func (w *ListenerWrapper) handleConnection(conn net.Conn) (net.Conn, bool) {
 
 	go func() {
 		lifecycle := newPassthroughStreamLifecycle(ctx, w.observer, resolution)
-		observedConn := &passthroughObservedConn{Conn: replayConn, lifecycle: lifecycle}
-		if err := server.ProxyStream(ctx, resolution.EndpointKey, observedConn); err != nil {
+		if err := server.ProxyStreamWithObserver(ctx, resolution.EndpointKey, replayConn, lifecycle); err != nil {
 			reason := classifyPassthroughStreamReject(err)
 			if !lifecycle.reject(reason) {
 				lifecycle.end()
